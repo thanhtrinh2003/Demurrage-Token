@@ -1,7 +1,7 @@
 [package]
-name = "{{project-name}}"
+name = "demurrage-token"
 version = "0.1.0"
-authors = ["{{authors}}"]
+authors = ["Thanh Trinh"]
 edition = "2018"
 
 exclude = [
@@ -47,6 +47,11 @@ cw2 = "0.13.2"
 schemars = "0.8.8"
 serde = { version = "1.0.137", default-features = false, features = ["derive"] }
 thiserror = { version = "1.0.31" }
+cw-utils = { path = "packages/utils", version = "0.13.4" }
+cw20 = { path = "packages/cw20", version = "0.13.4" }
+num-bigint = "0.4.3"
+bytes32 = "0.1.3"
+bigint = "4.4.3"
 
 [dev-dependencies]
 cosmwasm-schema = "1.0.0"
