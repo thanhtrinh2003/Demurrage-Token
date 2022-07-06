@@ -73,6 +73,8 @@ mod tests {
             }],
             mint: None,
             marketing: None,
+            periodMinutes: 0, //TODO: check later find 
+            taxLevelMinute: 0, //TODO: check later 
         };
         let info = mock_info("creator", &[]);
         let env = mock_env();

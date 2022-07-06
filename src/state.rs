@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::{Addr, Uint128};
+use cosmwasm_std::{Addr, Uint128, Timestamp};
 use cw_storage_plus::{Item, Map};
 
 use cw20::{AllowanceResponse, Logo, MarketingInfoResponse};
@@ -29,8 +29,22 @@ impl TokenInfo {
     }
 }
 
+
+//demurrage state
+pub struct State{   
+    pub start_time: Timestamp,
+    pub period: u128,
+    pub demurrage_value: u128,
+    pub sink_address: String,
+    pub minimum_participant_spend: u32 
+}
+
+
 pub const TOKEN_INFO: Item<TokenInfo> = Item::new("token_info");
 pub const MARKETING_INFO: Item<MarketingInfoResponse> = Item::new("marketing_info");
 pub const LOGO: Item<Logo> = Item::new("logo");
 pub const BALANCES: Map<&Addr, Uint128> = Map::new("balance");
 pub const ALLOWANCES: Map<(&Addr, &Addr), AllowanceResponse> = Map::new("allowance");
+
+//demurrage state 
+pub const STATE: Item<State> = Item::new("demurrage_state");

@@ -17,7 +17,7 @@ use crate::allowances::{
 use crate::enumerable::{query_all_accounts, query_all_allowances};
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{MinterData, TokenInfo, BALANCES, LOGO, MARKETING_INFO, TOKEN_INFO};
+use crate::state::{MinterData, TokenInfo, BALANCES, LOGO, MARKETING_INFO, TOKEN_INFO, State};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw20-base";
@@ -30,18 +30,19 @@ extern crate num_bigint;
 extern crate bytes32;
 extern crate bigint;
 
-use bigint::U256;
+
+//use bigint::U256;
 
 
-const shiftRedistributionPeriod: u8 = 0;
-const maskRedistributionPeriod: i128 = 1<<32-1; //ask Ezzat: originally int 256
-const shiftRedistributionValue: u8 = 32;
-const maskRedistributionValue: u128 = ((1<<72)-1) << 32; //ask Ezzat: originally int 256
-const shiftRedistributionDemurrage: u8 = 104;
-//const maskRedistributionDemurrage: u128 = ((1 << 20) - 1) << 140; //ask Ezzat: originally int 256 (overflow, should be added later)
-
-const nanoDivider: u128 = 100000000000000000000000000;
-const growthResolutionFactor: u128 = 1000000000000;
+// no need to readjust   
+// const shiftRedistributionPeriod: u8 = 0;
+// const maskRedistributionPeriod: i128 = 1<<32-1; //ask Ezzat: originally int 256
+// const shiftRedistributionValue: u8 = 32;
+// const maskRedistributionValue: u128 = ((1<<72)-1) << 32; //ask Ezzat: originally int 256
+// const shiftRedistributionDemurrage: u8 = 104;
+// //const maskRedistributionDemurrage: u128 = ((1 << 20) - 1) << 140; //ask Ezzat: originally int 256 (overflow, should be added later)
+// const nanoDivider: u128 = 100000000000000000000000000;
+// const growthResolutionFactor: u128 = 1000000000000;
 
 
 /// Checks if data starts with XML preamble
@@ -121,15 +122,32 @@ pub fn instantiate(
 
 
     // Demurrage Setup 
-    let demurrageTimeStamp = _env.block.time;
-    let periodStart = demurrageTimeStamp;
-    let periodDuration = msg.periodMinutes * 60;
+    let period_start = _env.block.time;
+    let period_duration = msg.period_minutes * 60;
     // let demurrageAmount = 10000000000000000000000000000; (overflow, will added later)
     //demurrageAmount = 100000000000000000000000000000000000000 - _taxLevelMinute; // Represents 38 decimal places, same as resolutionFactor
     //demurrageAmount = 100000000000000000000000000000000000000;
     //demurragePeriod = 1;
+    let tax_level = msg.tax_level_minute;
 
-    let taxLevel = msg.taxLevelMinute;
+    
+    let decimals = msg.decimals;
+    let base_ten: u32 = 10;
+    
+    let state = State{
+        start_time : period_start, 
+        period: period_duration, 
+        demurrage_value: 10000000, //fix later
+        sink_address: msg.sink_address, 
+        minimum_participant_spend: base_ten.pow(decimals),
+    };
+
+
+
+
+
+
+
 
     if let Some(limit) = msg.get_cap() {
         if total_supply > limit {
@@ -155,6 +173,8 @@ pub fn instantiate(
     };
     TOKEN_INFO.save(deps.storage, &data)?;
 
+
+    //TODO: delete this marketing code later 
     if let Some(marketing) = msg.marketing {
         let logo = if let Some(logo) = marketing.logo {
             verify_logo(&logo)?;
@@ -211,50 +231,14 @@ pub fn validate_accounts(accounts: &[Cw20Coin]) -> Result<(), ContractError> {
     }
 }
 
-// DEMURRAGE FUNCTION
 
-// EZZAT
-
-// param: u256, return: bytes32
-// pub fn toRedistribtuion(
-//     participants : U256,
-//     demurrageModifierPpm : U256, 
-//     value : U256, 
-//     period : U256
-// ) 
-// -> bytes32 {
-//     let redistribution: bytes32;
-
-//     // redistribution |= bytes32((demurrageModifierPpm << shiftRedistributionDemurrage) & maskRedistributionDemurrage);
-// 	// redistribution |= bytes32((value << shiftRedistributionValue) & maskRedistributionValue); 
-// 	// redistribution |= bytes32(period & maskRedistributionPeriod);
-
-//     return redistribution;
-// }
+//change period function
 
 
-// // param: bytes32, return u256
-// pub fn toRedistribtuionPeriod(
-//     redistribution : bytes32
-// )
-// -> (){
-//     return (redistribution) & maskRedistributionPeriod;
-// }
+//update demurrage rate function
 
-// pub fn toRedistributionSupply(
-//     redistribution: bytes32
-// )
-// -> U256 {
-    
-// }
 
-// pub fn toRedistritbutionDemurrageModifer(
-//     redistribution: bytes32
-// )
-// -> () {
-
-// }
-
+//apply demurrage to function
 
 
 
@@ -308,9 +292,24 @@ pub fn execute(
         ExecuteMsg::UploadLogo(logo) => execute_upload_logo(deps, env, info, logo),
         ExecuteMsg::UpdateMinter { new_minter } => {
             execute_update_minter(deps, env, info, new_minter)
-        }
+        },
+
+
+        //ExecuteMsg::DefaultRedistribution { sinked_account, amount } => execute_default_redistribute(deps, env, info, state, address, amount),
+
+        //ExecuteMsg::ChangePeriod {} => execute_change_period(deps, env, info, state, address, amount)
+
+        //ExecuteMsg::IncrementRedistributionParticipations {} => execute_increase_redistribtuion_particioant (deps, env, info, state, address, amount), 
+
+        //ExecuteMsg::Remainder {amount} => execute_remainder(deps, env, info, address, amount),
+
+        //ExecuteMsg::ApplyDemurrage {} => execute_apply_demurrage(deps, env, info, state, aaddress, amount)
+
     }
 }
+
+///Default Redistribution:
+
 
 pub fn execute_transfer(
     deps: DepsMut,
