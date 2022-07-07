@@ -306,16 +306,45 @@ pub fn execute(
     }
 }
 
-///Default Redistribution:
+/// Apply Default Redistribution: all amounts go to sink address
+pub fn apply_default_redistribution(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    state: State,
+    distribution: u128, 
+) -> Result<Response, ContractError> {
+    let sink_addr = deps.api.addr_validate(&state.sink_address)?;
 
-pub fn getDistribution(
+    BALANCES.update(
+        deps.storage,
+        &sink_addr,
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(distribution))},
+    );  
+
+    let res = Response::new()
+    .add_attribute("action", "default_redistribution")
+    .add_attribute("amount", distribution.to_string());
+    
+    Ok(res)
+}
+
+
+/// Get Distribution Function
+pub fn get_distribution(
     deps: DepsMut, 
     _env: Env, 
     info: MessageInfo, 
     state: State,
-) -> u128 {
+) -> Result<u128, ContractError> {
+    let mut config = TOKEN_INFO
+    .may_load(deps.storage)?
+    .ok_or(ContractError::Unauthorized {})?;
+
     let difference : u128;
-    difference = supply * (1-)
+
+    difference = config.total_supply.u128() * (resolutionFactor- (state.demurrage_amount * 1000000000));
+    return Ok(difference/ resolutionFactor);
 }
 
 ///Default apply demurrage function, no limitations
