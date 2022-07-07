@@ -11,7 +11,7 @@ use cw20::{AllowanceResponse, Logo, MarketingInfoResponse};
 pub struct TokenInfo {
     pub name: String,
     pub symbol: String,
-    pub decimals: u8,
+    pub decimals: u32,
     pub total_supply: Uint128,
     pub mint: Option<MinterData>,
 }
@@ -31,12 +31,18 @@ impl TokenInfo {
 
 
 //demurrage state
+#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
 pub struct State{   
-    pub start_time: Timestamp,
-    pub period: u128,
-    pub demurrage_value: u128,
+    ///timestamp of the initiation or from the last demurrage timestamp 
+    pub demurrage_timestamp: Timestamp,
+    ///number of minutes in one period 
+    pub period_minute: u128,
+    /// current period count
+    pub current_period: u128,
+    pub demurrage_amount: u128,
     pub sink_address: String,
-    pub minimum_participant_spend: u32 
+    pub minimum_participant_spend: u32,
+    pub tax_level: u128,
 }
 
 

@@ -1,7 +1,7 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128,
+    to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128, Timestamp,
 };
 
 use cw2::set_contract_version;
@@ -17,7 +17,7 @@ use crate::allowances::{
 use crate::enumerable::{query_all_accounts, query_all_allowances};
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{MinterData, TokenInfo, BALANCES, LOGO, MARKETING_INFO, TOKEN_INFO, State};
+use crate::state::{MinterData, TokenInfo, BALANCES, LOGO, MARKETING_INFO, TOKEN_INFO, State, STATE};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw20-base";
@@ -31,7 +31,7 @@ extern crate bytes32;
 extern crate bigint;
 
 
-//use bigint::U256;
+use bigint::U256;
 
 
 // no need to readjust   
@@ -41,8 +41,10 @@ extern crate bigint;
 // const maskRedistributionValue: u128 = ((1<<72)-1) << 32; //ask Ezzat: originally int 256
 // const shiftRedistributionDemurrage: u8 = 104;
 // //const maskRedistributionDemurrage: u128 = ((1 << 20) - 1) << 140; //ask Ezzat: originally int 256 (overflow, should be added later)
-// const nanoDivider: u128 = 100000000000000000000000000;
-// const growthResolutionFactor: u128 = 1000000000000;
+
+const nanoDivider: u128 = 100000000000000000000000000;
+const growthResolutionFactor: u128 = 1000000000000;
+const resolutionFactor: u128 = nanoDivider * growthResolutionFactor; //this value may get out of bound
 
 
 /// Checks if data starts with XML preamble
@@ -129,24 +131,19 @@ pub fn instantiate(
     //demurrageAmount = 100000000000000000000000000000000000000;
     //demurragePeriod = 1;
     let tax_level = msg.tax_level_minute;
-
-    
-    let decimals = msg.decimals;
     let base_ten: u32 = 10;
-    
+
+    //saving 
     let state = State{
-        start_time : period_start, 
-        period: period_duration, 
-        demurrage_value: 10000000, //fix later
+        demurrage_timestamp : period_start, 
+        period_minute: period_duration, 
+        current_period: 0,
+        demurrage_amount: 10000000, //fix later
         sink_address: msg.sink_address, 
-        minimum_participant_spend: base_ten.pow(decimals),
+        minimum_participant_spend: base_ten.pow(msg.decimals),
+        tax_level: tax_level,
     };
-
-
-
-
-
-
+    STATE.save(deps.storage, &state)?;
 
 
     if let Some(limit) = msg.get_cap() {
@@ -250,6 +247,7 @@ pub fn execute(
     env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
+    state: State,
 ) -> Result<Response, ContractError> {
     match msg {
         ExecuteMsg::Transfer { recipient, amount } => {
@@ -309,6 +307,111 @@ pub fn execute(
 }
 
 ///Default Redistribution:
+
+pub fn getDistribution(
+    deps: DepsMut, 
+    _env: Env, 
+    info: MessageInfo, 
+    state: State,
+) -> u128 {
+    let difference : u128;
+    difference = supply * (1-)
+}
+
+///Default apply demurrage function, no limitations
+///Refer to execute_apply_demurrage_limited for more information
+pub fn execute_apply_demurrage(
+    deps: DepsMut, 
+    _env: Env, 
+    info: MessageInfo, 
+    state: State,
+) -> bool{
+    return execute_apply_demurrage_limited(deps, _env, info, state, 0);
+}
+
+/// Calculate and cache the demurrage value correpsonding to the (period of the)
+/// time of the methdo call
+pub fn execute_apply_demurrage_limited(
+    deps: DepsMut, 
+    _env: Env, 
+    info: MessageInfo, 
+    state: State,
+    rounds: u64,
+) -> bool{
+    let periodCount: u64;
+    let lastDemurrageAmount: u128;
+    
+    periodCount = getMinutesDelta(_env, state.demurrage_timestamp);
+    if(periodCount == 0)
+    {
+        return false;
+    }
+
+    // safety limit for exponential calculation to ensure that we can always
+	// execute this code no matter how much time passes.	
+    if(rounds > 0 && rounds < periodCount)
+    {
+        periodCount = rounds;
+    }
+
+    lastDemurrageAmount = decayBy(state.demurrage_amount, state.tax_level, periodCount);
+    state.demurrage_timestamp.plus_seconds(periodCount * 60);
+
+    STATE.save(deps.storage, &state);
+    return true;
+}
+
+
+fn getPeriodTimeDelta (
+    
+) -> u128 {
+    return 0;
+}
+
+
+
+fn getMinutesDelta (
+    _env: Env, 
+    last_timestamp: Timestamp
+) -> u64{
+    return (_env.block.time.seconds() - last_timestamp.seconds())/60
+}
+
+fn growBy (
+    value: u128, 
+    tax_level: u128,
+    period: u64, 
+) -> u128 {
+    let valueFactor: u128; 
+    let truncatedTaxLevel:u128; 
+
+    valueFactor = growthResolutionFactor;
+    truncatedTaxLevel = tax_level / nanoDivider;
+
+
+    for n in 1..period {
+        valueFactor = valueFactor + ((valueFactor * truncatedTaxLevel)/growthResolutionFactor);
+    }
+    return (valueFactor * value) * growthResolutionFactor;
+}
+
+fn decayBy (
+    value: u128, 
+    tax_level: u128,
+    period: u64, 
+) -> u128 {
+    let valueFactor: u128; 
+    let truncatedTaxLevel:u128; 
+
+    valueFactor = growthResolutionFactor;
+    truncatedTaxLevel = tax_level / nanoDivider;
+
+
+    for n in 1..period {
+        valueFactor = valueFactor - ((valueFactor * truncatedTaxLevel)/growthResolutionFactor);
+    }
+    return (valueFactor * value) * growthResolutionFactor;
+}
 
 
 pub fn execute_transfer(
