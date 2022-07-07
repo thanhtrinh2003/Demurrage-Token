@@ -23,7 +23,7 @@ pub struct InstantiateMsg {
     
     // demurrage variable 
     pub tax_level_minute: u128,
-    pub period_minutes: u128,
+    pub period_minutes: u64,
     pub supply_cap: u128,
     pub sink_address: String,
 }

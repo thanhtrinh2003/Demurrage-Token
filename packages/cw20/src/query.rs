@@ -59,7 +59,7 @@ pub struct BalanceResponse {
 pub struct TokenInfoResponse {
     pub name: String,
     pub symbol: String,
-    pub decimals: u8,
+    pub decimals: u32,
     pub total_supply: Uint128,
 }
 
