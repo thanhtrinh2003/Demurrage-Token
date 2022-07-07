@@ -132,25 +132,28 @@ pub fn instantiate(
     //demurragePeriod = 1;
     let tax_level = msg.tax_level_minute;
     let base_ten: u32 = 10;
-
-    //saving 
-    let state = State{
-        demurrage_timestamp : period_start, 
-        period_minute: period_duration, 
-        current_period: 0,
-        demurrage_amount: 10000000, //fix later
-        sink_address: msg.sink_address, 
-        minimum_participant_spend: base_ten.pow(msg.decimals),
-        tax_level: tax_level,
-    };
-    STATE.save(deps.storage, &state)?;
-
+    
 
     if let Some(limit) = msg.get_cap() {
         if total_supply > limit {
             return Err(StdError::generic_err("Initial supply greater than cap").into());
         }
     }
+
+    let sink_addr = msg.sink_address;
+
+    //saving 
+    let state = State{
+        start_timestamp: period_start,
+        demurrage_timestamp : period_start, 
+        period_minute: period_duration, 
+        current_period: 0,
+        demurrage_amount: 10000000, //fix later
+        sink_address: sink_addr, 
+        minimum_participant_spend: base_ten.pow(msg.decimals),
+        tax_level: tax_level,
+    };
+    STATE.save(deps.storage, &state)?;
 
     let mint = match msg.mint {
         Some(m) => Some(MinterData {
@@ -227,18 +230,6 @@ pub fn validate_accounts(accounts: &[Cw20Coin]) -> Result<(), ContractError> {
         Ok(())
     }
 }
-
-
-//change period function
-
-
-//update demurrage rate function
-
-
-//apply demurrage to function
-
-
-
 
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -330,6 +321,50 @@ pub fn apply_default_redistribution(
 }
 
 
+/// Add an entered demurrage period to the redistribution array
+// pub fn checkPeriod(
+//     deps: DepsMut,            
+//     _env: Env, 
+//     info: MessageInfo, 
+//     state: State,
+// ) -> () {
+//     let current_period :u128;
+//     current_period = actualPeriod(deps, _env, info, state);
+//     if (currentPeriod <= state.current_period)
+//     {
+//         return 0;
+//     }
+//     else
+// }
+
+
+///Amount of demurrage cycles inbetween the current timestamp and the given target time
+pub fn demurrageCycles(
+    _env: Env,
+    target: Timestamp,
+) -> u128 {
+    return u128::from((_env.block.time.seconds() - target.seconds())/60);
+}
+
+
+///Recalculate the demurrage modifier for the new period
+pub fn changePeriod(
+
+) -> () {
+
+}
+
+
+///Get the demurrage period of the current block number
+pub fn actualPeriod(
+    deps: DepsMut, 
+    _env: Env, 
+    info: MessageInfo, 
+    state: State,
+)-> u128 {
+    return u128::from((_env.block.time.seconds()- state.start_timestamp.seconds())/60 / state.period_minute + 1);
+}
+
 /// Get Distribution Function
 pub fn get_distribution(
     deps: DepsMut, 
@@ -367,7 +402,7 @@ pub fn execute_apply_demurrage_limited(
     state: State,
     rounds: u64,
 ) -> bool{
-    let periodCount: u64;
+    let mut periodCount: u64;
     let lastDemurrageAmount: u128;
     
     periodCount = getMinutesDelta(_env, state.demurrage_timestamp);
@@ -390,15 +425,16 @@ pub fn execute_apply_demurrage_limited(
     return true;
 }
 
-
+/// Return timestamp of start of period threshold
 fn getPeriodTimeDelta (
-    
-) -> u128 {
-    return 0;
+    period_count: u64,
+    state: State
+) -> Timestamp {
+    return state.start_timestamp.plus_seconds(period_count * state.period_minute * 60);
 }
 
 
-
+/// Calculate the time delta in whole minutes passed between given timestamp and current timestamp
 fn getMinutesDelta (
     _env: Env, 
     last_timestamp: Timestamp
@@ -411,7 +447,7 @@ fn growBy (
     tax_level: u128,
     period: u64, 
 ) -> u128 {
-    let valueFactor: u128; 
+    let mut valueFactor: u128; 
     let truncatedTaxLevel:u128; 
 
     valueFactor = growthResolutionFactor;
@@ -429,7 +465,7 @@ fn decayBy (
     tax_level: u128,
     period: u64, 
 ) -> u128 {
-    let valueFactor: u128; 
+    let mut valueFactor: u128; 
     let truncatedTaxLevel:u128; 
 
     valueFactor = growthResolutionFactor;

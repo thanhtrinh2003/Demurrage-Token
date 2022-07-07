@@ -33,10 +33,12 @@ impl TokenInfo {
 //demurrage state
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
 pub struct State{   
+    //timestamp of the initiation
+    pub start_timestamp: Timestamp,
     ///timestamp of the initiation or from the last demurrage timestamp 
     pub demurrage_timestamp: Timestamp,
     ///number of minutes in one period 
-    pub period_minute: u128,
+    pub period_minute: u64, 
     /// current period count
     pub current_period: u128,
     pub demurrage_amount: u128,
