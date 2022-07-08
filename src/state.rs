@@ -31,7 +31,7 @@ impl TokenInfo {
 
 
 //demurrage state
-#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
+#[derive(Serialize, Deserialize, Copy, Clone, PartialEq, JsonSchema, Debug)]
 pub struct State{   
     //timestamp of the initiation
     pub start_timestamp: Timestamp,
@@ -40,11 +40,17 @@ pub struct State{
     ///number of minutes in one period 
     pub period_minute: u64, 
     /// current period count
-    pub current_period: u128,
+    pub current_period: u64,
     pub demurrage_amount: u128,
     pub sink_address: String,
     pub minimum_participant_spend: u32,
     pub tax_level: u128,
+}
+
+impl State{
+    pub fn getCurrentPeriod(&self) -> u64{
+        return self.current_period;
+    }
 }
 
 

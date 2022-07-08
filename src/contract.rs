@@ -6,13 +6,12 @@ use cosmwasm_std::{
 
 use cw2::set_contract_version;
 use cw20::{
-    BalanceResponse, Cw20Coin, Cw20ReceiveMsg, DownloadLogoResponse, EmbeddedLogo, Logo, LogoInfo,
-    MarketingInfoResponse, MinterResponse, TokenInfoResponse,
+    BalanceResponse, Cw20Coin, Cw20ReceiveMsg, MinterResponse, TokenInfoResponse,
 };
 
 use crate::allowances::{
     execute_burn_from, execute_decrease_allowance, execute_increase_allowance, execute_send_from,
-    execute_transfer_from, query_allowance,
+    query_allowance, deduct_allowance,
 };
 use crate::enumerable::{query_all_accounts, query_all_allowances};
 use crate::error::ContractError;
@@ -23,90 +22,10 @@ use crate::state::{MinterData, TokenInfo, BALANCES, LOGO, MARKETING_INFO, TOKEN_
 const CONTRACT_NAME: &str = "crates.io:cw20-base";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const LOGO_SIZE_CAP: usize = 5 * 1024;
-
-//external crate 
-extern crate num_bigint;
-extern crate bytes32;
-extern crate bigint;
-
-
-use bigint::U256;
-
-
-// no need to readjust   
-// const shiftRedistributionPeriod: u8 = 0;
-// const maskRedistributionPeriod: i128 = 1<<32-1; //ask Ezzat: originally int 256
-// const shiftRedistributionValue: u8 = 32;
-// const maskRedistributionValue: u128 = ((1<<72)-1) << 32; //ask Ezzat: originally int 256
-// const shiftRedistributionDemurrage: u8 = 104;
-// //const maskRedistributionDemurrage: u128 = ((1 << 20) - 1) << 140; //ask Ezzat: originally int 256 (overflow, should be added later)
-
 const nanoDivider: u128 = 100000000000000000000000000;
 const growthResolutionFactor: u128 = 1000000000000;
 const resolutionFactor: u128 = nanoDivider * growthResolutionFactor; //this value may get out of bound
 
-
-/// Checks if data starts with XML preamble
-fn verify_xml_preamble(data: &[u8]) -> Result<(), ContractError> {
-    // The easiest way to perform this check would be just match on regex, however regex
-    // compilation is heavy and probably not worth it.
-
-    let preamble = data
-        .split_inclusive(|c| *c == b'>')
-        .next()
-        .ok_or(ContractError::InvalidXmlPreamble {})?;
-
-    const PREFIX: &[u8] = b"<?xml ";
-    const POSTFIX: &[u8] = b"?>";
-
-    if !(preamble.starts_with(PREFIX) && preamble.ends_with(POSTFIX)) {
-        Err(ContractError::InvalidXmlPreamble {})
-    } else {
-        Ok(())
-    }
-
-    // Additionally attributes format could be validated as they are well defined, as well as
-    // comments presence inside of preable, but it is probably not worth it.
-}
-
-/// Validates XML logo
-fn verify_xml_logo(logo: &[u8]) -> Result<(), ContractError> {
-    verify_xml_preamble(logo)?;
-
-    if logo.len() > LOGO_SIZE_CAP {
-        Err(ContractError::LogoTooBig {})
-    } else {
-        Ok(())
-    }
-}
-
-/// Validates png logo
-fn verify_png_logo(logo: &[u8]) -> Result<(), ContractError> {
-    // PNG header format:
-    // 0x89 - magic byte, out of ASCII table to fail on 7-bit systems
-    // "PNG" ascii representation
-    // [0x0d, 0x0a] - dos style line ending
-    // 0x1a - dos control character, stop displaying rest of the file
-    // 0x0a - unix style line ending
-    const HEADER: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-    if logo.len() > LOGO_SIZE_CAP {
-        Err(ContractError::LogoTooBig {})
-    } else if !logo.starts_with(&HEADER) {
-        Err(ContractError::InvalidPngHeader {})
-    } else {
-        Ok(())
-    }
-}
-
-/// Checks if passed logo is correct, and if not, returns an error
-fn verify_logo(logo: &Logo) -> Result<(), ContractError> {
-    match logo {
-        Logo::Embedded(EmbeddedLogo::Svg(logo)) => verify_xml_logo(logo),
-        Logo::Embedded(EmbeddedLogo::Png(logo)) => verify_png_logo(logo),
-        Logo::Url(_) => Ok(()), // Any reasonable url validation would be regex based, probably not worth it
-    }
-}
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -173,33 +92,6 @@ pub fn instantiate(
     };
     TOKEN_INFO.save(deps.storage, &data)?;
 
-
-    //TODO: delete this marketing code later 
-    if let Some(marketing) = msg.marketing {
-        let logo = if let Some(logo) = marketing.logo {
-            verify_logo(&logo)?;
-            LOGO.save(deps.storage, &logo)?;
-
-            match logo {
-                Logo::Url(url) => Some(LogoInfo::Url(url)),
-                Logo::Embedded(_) => Some(LogoInfo::Embedded),
-            }
-        } else {
-            None
-        };
-
-        let data = MarketingInfoResponse {
-            project: marketing.project,
-            description: marketing.description,
-            marketing: marketing
-                .marketing
-                .map(|addr| deps.api.addr_validate(&addr))
-                .transpose()?,
-            logo,
-        };
-        MARKETING_INFO.save(deps.storage, &data)?;
-    }
-
     Ok(Response::default())
 }
 
@@ -242,7 +134,7 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
     match msg {
         ExecuteMsg::Transfer { recipient, amount } => {
-            execute_transfer(deps, env, info, recipient, amount)
+            execute_transfer(deps, env, info, recipient, amount, state)
         }
         ExecuteMsg::Burn { amount } => execute_burn(deps, env, info, amount),
         ExecuteMsg::Send {
@@ -250,7 +142,7 @@ pub fn execute(
             amount,
             msg,
         } => execute_send(deps, env, info, contract, amount, msg),
-        ExecuteMsg::Mint { recipient, amount } => execute_mint(deps, env, info, recipient, amount),
+        ExecuteMsg::Mint { recipient, amount } => execute_mint(deps, env, info, recipient, amount, state),
         ExecuteMsg::IncreaseAllowance {
             spender,
             amount,
@@ -265,7 +157,7 @@ pub fn execute(
             owner,
             recipient,
             amount,
-        } => execute_transfer_from(deps, env, info, owner, recipient, amount),
+        } => execute_transfer_from(deps, env, info, owner, recipient, amount, state),
         ExecuteMsg::BurnFrom { owner, amount } => execute_burn_from(deps, env, info, owner, amount),
         ExecuteMsg::SendFrom {
             owner,
@@ -273,12 +165,6 @@ pub fn execute(
             amount,
             msg,
         } => execute_send_from(deps, env, info, owner, contract, amount, msg),
-        ExecuteMsg::UpdateMarketing {
-            project,
-            description,
-            marketing,
-        } => execute_update_marketing(deps, env, info, project, description, marketing),
-        ExecuteMsg::UploadLogo(logo) => execute_upload_logo(deps, env, info, logo),
         ExecuteMsg::UpdateMinter { new_minter } => {
             execute_update_minter(deps, env, info, new_minter)
         },
@@ -300,8 +186,6 @@ pub fn execute(
 /// Apply Default Redistribution: all amounts go to sink address
 pub fn apply_default_redistribution(
     deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
     state: State,
     distribution: u128, 
 ) -> Result<Response, ContractError> {
@@ -342,16 +226,36 @@ pub fn apply_default_redistribution(
 pub fn demurrageCycles(
     _env: Env,
     target: Timestamp,
-) -> u128 {
-    return u128::from((_env.block.time.seconds() - target.seconds())/60);
+) -> u64 {
+    return _env.block.time.seconds() - target.seconds()/60;
 }
 
 
 ///Recalculate the demurrage modifier for the new period
 pub fn changePeriod(
+    deps: DepsMut, 
+    _env: Env, 
+    info: MessageInfo, 
+    state: State,
+) -> Result<bool, ContractError> {
+    apply_demurrage(deps, _env, state);
+    let nextPeriod: u64 = state.getCurrentPeriod() + 1;
+    let periodTimeStamp: Timestamp = getPeriodTimeDelta(state.start_timestamp, state.getCurrentPeriod(), state.period_minute);
+    let currentDemurrageAmount: u128 = state.demurrage_amount;
+    let demurrageCounts: u64= demurrageCycles(_env, periodTimeStamp);
+    let mut nextDemurrageAmount: u128;
+    if demurrageCounts > 0
+    {
+        nextDemurrageAmount = growBy(currentDemurrageAmount, state.tax_level, demurrageCounts);
+    }
+    else
+    {
+        nextDemurrageAmount = currentDemurrageAmount;
+    }
+    let distribution = get_distribution(deps, _env, info, state)?;
+    apply_default_redistribution(deps, state, distribution);
 
-) -> () {
-
+    return Ok(true);
 }
 
 
@@ -384,36 +288,34 @@ pub fn get_distribution(
 
 ///Default apply demurrage function, no limitations
 ///Refer to execute_apply_demurrage_limited for more information
-pub fn execute_apply_demurrage(
+pub fn apply_demurrage(
     deps: DepsMut, 
     _env: Env, 
-    info: MessageInfo, 
     state: State,
 ) -> bool{
-    return execute_apply_demurrage_limited(deps, _env, info, state, 0);
+    return apply_demurrage_limited(deps, _env, state, 0);
 }
 
 /// Calculate and cache the demurrage value correpsonding to the (period of the)
 /// time of the methdo call
-pub fn execute_apply_demurrage_limited(
+pub fn apply_demurrage_limited(
     deps: DepsMut, 
     _env: Env, 
-    info: MessageInfo, 
     state: State,
     rounds: u64,
 ) -> bool{
     let mut periodCount: u64;
     let lastDemurrageAmount: u128;
     
-    periodCount = getMinutesDelta(_env, state.demurrage_timestamp);
-    if(periodCount == 0)
+    periodCount = getMinutesDelta(_env.block.time, state.demurrage_timestamp);
+    if periodCount == 0
     {
         return false;
     }
 
     // safety limit for exponential calculation to ensure that we can always
 	// execute this code no matter how much time passes.	
-    if(rounds > 0 && rounds < periodCount)
+    if rounds > 0 && rounds < periodCount
     {
         periodCount = rounds;
     }
@@ -427,19 +329,30 @@ pub fn execute_apply_demurrage_limited(
 
 /// Return timestamp of start of period threshold
 fn getPeriodTimeDelta (
+    start_timestamp: Timestamp,
     period_count: u64,
-    state: State
+    period_minute: u64
 ) -> Timestamp {
-    return state.start_timestamp.plus_seconds(period_count * state.period_minute * 60);
+    return start_timestamp.plus_seconds(period_count * period_minute * 60);
+}
+
+
+//check please if it needs to fix the 100000000 value
+/// Inflates the given amount according to the current demurrage modifier
+fn toBaseAmount(
+    value: u128,
+    demurrageAmount: u128
+)-> u128{
+    return value *resolutionFactor / (demurrageAmount * 1000000000)
 }
 
 
 /// Calculate the time delta in whole minutes passed between given timestamp and current timestamp
 fn getMinutesDelta (
-    _env: Env, 
+    now_timestamp: Timestamp, 
     last_timestamp: Timestamp
 ) -> u64{
-    return (_env.block.time.seconds() - last_timestamp.seconds())/60
+    return (now_timestamp.seconds() - last_timestamp.seconds())/60
 }
 
 fn growBy (
@@ -485,7 +398,14 @@ pub fn execute_transfer(
     info: MessageInfo,
     recipient: String,
     amount: Uint128,
+    state: State,
 ) -> Result<Response, ContractError> {
+    let baseValue: u128;
+
+    changePeriod(deps, _env, info, state);
+
+    baseValue = toBaseAmount(amount.u128(), state.demurrage_amount);
+
     if amount == Uint128::zero() {
         return Err(ContractError::InvalidZeroAmount {});
     }
@@ -502,12 +422,55 @@ pub fn execute_transfer(
     BALANCES.update(
         deps.storage,
         &rcpt_addr,
-        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + amount) },
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(baseValue)) },
     )?;
 
     let res = Response::new()
         .add_attribute("action", "transfer")
         .add_attribute("from", info.sender)
+        .add_attribute("to", recipient)
+        .add_attribute("amount", amount);
+    Ok(res)
+}
+
+pub fn execute_transfer_from(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    owner: String,
+    recipient: String,
+    amount: Uint128,
+    state: State, 
+) -> Result<Response, ContractError> {
+    let rcpt_addr = deps.api.addr_validate(&recipient)?;
+    let owner_addr = deps.api.addr_validate(&owner)?;
+
+    // deduct allowance before doing anything else have enough allowance
+    deduct_allowance(deps.storage, &owner_addr, &info.sender, &env.block, amount)?;
+
+    let baseValue: u128;
+
+    changePeriod(deps, env, info, state);
+
+    baseValue = toBaseAmount(amount.u128(), state.demurrage_amount);
+
+
+    BALANCES.update(
+        deps.storage,
+        &owner_addr,
+        |balance: Option<Uint128>| -> StdResult<_> {
+            Ok(balance.unwrap_or_default().checked_sub(amount)?)
+        },
+    )?;
+    BALANCES.update(
+        deps.storage,
+        &rcpt_addr,
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(baseValue)) },
+    )?;
+
+    let res = Response::new()
+        .add_attribute("action", "transfer")
+        .add_attribute("from", owner)
         .add_attribute("to", recipient)
         .add_attribute("amount", amount);
     Ok(res)
@@ -550,6 +513,7 @@ pub fn execute_mint(
     info: MessageInfo,
     recipient: String,
     amount: Uint128,
+    state: State, 
 ) -> Result<Response, ContractError> {
     if amount == Uint128::zero() {
         return Err(ContractError::InvalidZeroAmount {});
@@ -578,12 +542,19 @@ pub fn execute_mint(
     }
     TOKEN_INFO.save(deps.storage, &config)?;
 
+    changePeriod(deps, _env, info, state);
+
+    let baseAmount : u128;
+    baseAmount = toBaseAmount(amount.u128(), state.demurrage_amount)
+    ;
+
+
     // add amount to recipient balance
     let rcpt_addr = deps.api.addr_validate(&recipient)?;
     BALANCES.update(
         deps.storage,
         &rcpt_addr,
-        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + amount) },
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(baseAmount)) },
     )?;
 
     let res = Response::new()
@@ -666,94 +637,6 @@ pub fn execute_update_minter(
         .add_attribute("new_minter", new_minter))
 }
 
-pub fn execute_update_marketing(
-    deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    project: Option<String>,
-    description: Option<String>,
-    marketing: Option<String>,
-) -> Result<Response, ContractError> {
-    let mut marketing_info = MARKETING_INFO
-        .may_load(deps.storage)?
-        .ok_or(ContractError::Unauthorized {})?;
-
-    if marketing_info
-        .marketing
-        .as_ref()
-        .ok_or(ContractError::Unauthorized {})?
-        != &info.sender
-    {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    match project {
-        Some(empty) if empty.trim().is_empty() => marketing_info.project = None,
-        Some(project) => marketing_info.project = Some(project),
-        None => (),
-    }
-
-    match description {
-        Some(empty) if empty.trim().is_empty() => marketing_info.description = None,
-        Some(description) => marketing_info.description = Some(description),
-        None => (),
-    }
-
-    match marketing {
-        Some(empty) if empty.trim().is_empty() => marketing_info.marketing = None,
-        Some(marketing) => marketing_info.marketing = Some(deps.api.addr_validate(&marketing)?),
-        None => (),
-    }
-
-    if marketing_info.project.is_none()
-        && marketing_info.description.is_none()
-        && marketing_info.marketing.is_none()
-        && marketing_info.logo.is_none()
-    {
-        MARKETING_INFO.remove(deps.storage);
-    } else {
-        MARKETING_INFO.save(deps.storage, &marketing_info)?;
-    }
-
-    let res = Response::new().add_attribute("action", "update_marketing");
-    Ok(res)
-}
-
-pub fn execute_upload_logo(
-    deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    logo: Logo,
-) -> Result<Response, ContractError> {
-    let mut marketing_info = MARKETING_INFO
-        .may_load(deps.storage)?
-        .ok_or(ContractError::Unauthorized {})?;
-
-    verify_logo(&logo)?;
-
-    if marketing_info
-        .marketing
-        .as_ref()
-        .ok_or(ContractError::Unauthorized {})?
-        != &info.sender
-    {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    LOGO.save(deps.storage, &logo)?;
-
-    let logo_info = match logo {
-        Logo::Url(url) => LogoInfo::Url(url),
-        Logo::Embedded(_) => LogoInfo::Embedded,
-    };
-
-    marketing_info.logo = Some(logo_info);
-    MARKETING_INFO.save(deps.storage, &marketing_info)?;
-
-    let res = Response::new().add_attribute("action", "upload_logo");
-    Ok(res)
-}
-
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
@@ -771,8 +654,6 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::AllAccounts { start_after, limit } => {
             to_binary(&query_all_accounts(deps, start_after, limit)?)
         }
-        QueryMsg::MarketingInfo {} => to_binary(&query_marketing_info(deps)?),
-        QueryMsg::DownloadLogo {} => to_binary(&query_download_logo(deps)?),
     }
 }
 
@@ -805,25 +686,6 @@ pub fn query_minter(deps: Deps) -> StdResult<Option<MinterResponse>> {
         None => None,
     };
     Ok(minter)
-}
-
-pub fn query_marketing_info(deps: Deps) -> StdResult<MarketingInfoResponse> {
-    Ok(MARKETING_INFO.may_load(deps.storage)?.unwrap_or_default())
-}
-
-pub fn query_download_logo(deps: Deps) -> StdResult<DownloadLogoResponse> {
-    let logo = LOGO.load(deps.storage)?;
-    match logo {
-        Logo::Embedded(EmbeddedLogo::Svg(logo)) => Ok(DownloadLogoResponse {
-            mime_type: "image/svg+xml".to_owned(),
-            data: logo,
-        }),
-        Logo::Embedded(EmbeddedLogo::Png(logo)) => Ok(DownloadLogoResponse {
-            mime_type: "image/png".to_owned(),
-            data: logo,
-        }),
-        Logo::Url(_) => Err(StdError::not_found("logo")),
-    }
 }
 
 #[cfg(test)]

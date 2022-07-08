@@ -108,42 +108,6 @@ pub fn deduct_allowance(
     })
 }
 
-pub fn execute_transfer_from(
-    deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    owner: String,
-    recipient: String,
-    amount: Uint128,
-) -> Result<Response, ContractError> {
-    let rcpt_addr = deps.api.addr_validate(&recipient)?;
-    let owner_addr = deps.api.addr_validate(&owner)?;
-
-    // deduct allowance before doing anything else have enough allowance
-    deduct_allowance(deps.storage, &owner_addr, &info.sender, &env.block, amount)?;
-
-    BALANCES.update(
-        deps.storage,
-        &owner_addr,
-        |balance: Option<Uint128>| -> StdResult<_> {
-            Ok(balance.unwrap_or_default().checked_sub(amount)?)
-        },
-    )?;
-    BALANCES.update(
-        deps.storage,
-        &rcpt_addr,
-        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + amount) },
-    )?;
-
-    let res = Response::new().add_attributes(vec![
-        attr("action", "transfer_from"),
-        attr("from", owner),
-        attr("to", recipient),
-        attr("by", info.sender),
-        attr("amount", amount),
-    ]);
-    Ok(res)
-}
 
 pub fn execute_burn_from(
     deps: DepsMut,
