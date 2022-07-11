@@ -22,9 +22,9 @@ use crate::state::{MinterData, TokenInfo, BALANCES, TOKEN_INFO, State, STATE};
 const CONTRACT_NAME: &str = "crates.io:cw20-base";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const nanoDivider: u128 = 100000000000000000000000000;
-const growthResolutionFactor: u128 = 1000000000000;
-const resolutionFactor: u128 = nanoDivider * growthResolutionFactor; //this value may get out of bound
+const NANO_DIVDER: u128 = 100000000000000000000000000;
+const GROWTH_RESOLUTION_FACTOR: u128 = 1000000000000;
+const RESOLUTION_FACTOR: u128 = NANO_DIVDER * GROWTH_RESOLUTION_FACTOR; //this value may get out of bound
 
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -45,9 +45,9 @@ pub fn instantiate(
     // Demurrage Setup 
     let period_start = _env.block.time;
     let period_duration = msg.period_minutes * 60;
-    // let demurrageAmount = 10000000000000000000000000000; (overflow, will added later)
     //demurrageAmount = 100000000000000000000000000000000000000 - _taxLevelMinute; // Represents 38 decimal places, same as resolutionFactor
     //demurrageAmount = 100000000000000000000000000000000000000;
+    let demurrage_amount: u128 = 10000000000000000000000000000; //(overflow, will added later)
     //demurragePeriod = 1;
     let tax_level = msg.tax_level_minute;
     let base_ten: u32 = 10;
@@ -67,7 +67,7 @@ pub fn instantiate(
         demurrage_timestamp : period_start, 
         period_minute: period_duration, 
         current_period: 0,
-        demurrage_amount: 10000000, //fix later
+        demurrage_amount: demurrage_amount,
         sink_address: sink_addr, 
         minimum_participant_spend: base_ten.pow(msg.decimals),
         tax_level: tax_level,
@@ -232,29 +232,29 @@ pub fn demurrageCycles(
 
 
 ///Recalculate the demurrage modifier for the new period
-pub fn changePeriod(
+pub fn change_period(
     deps: &mut DepsMut, 
     _env: Env, 
     state: &mut State,
 ) -> Result<bool, ContractError> {
     let current_timestamp: Timestamp = _env.block.time;
     apply_demurrage(deps, current_timestamp, state);
-    let nextPeriod: u64 = state.current_period + 1;
-    let periodTimeStamp: Timestamp = getPeriodTimeDelta(state.start_timestamp, state.getCurrentPeriod(), state.period_minute);
-    let currentDemurrageAmount: u128 = state.demurrage_amount;
-    let demurrageCounts: u64= demurrageCycles(current_timestamp, periodTimeStamp);
-    let nextDemurrageAmount: u128;
-    if demurrageCounts > 0
+    let next_period: u64 = state.current_period + 1;
+    let period_timestamp: Timestamp = get_period_time_delta(state.start_timestamp, state.getCurrentPeriod(), state.period_minute);
+    let current_demurrage_amount: u128 = state.demurrage_amount;
+    let demurrage_counts: u64= demurrageCycles(current_timestamp, period_timestamp);
+    let next_demurrage_amount: u128;
+    if demurrage_counts > 0
     {
-        nextDemurrageAmount = growBy(currentDemurrageAmount, state.tax_level, demurrageCounts);
+        next_demurrage_amount = grow_by(current_demurrage_amount, state.tax_level, demurrage_counts);
     }
     else
     {
-        nextDemurrageAmount = currentDemurrageAmount;
+        next_demurrage_amount = current_demurrage_amount;
     }
 
-    state.demurrage_amount = nextDemurrageAmount;
-    state.current_period = nextPeriod;
+    state.demurrage_amount = next_demurrage_amount;
+    state.current_period = next_period;
 
     STATE.save(deps.storage, &state);
 
@@ -266,7 +266,7 @@ pub fn changePeriod(
 
 
 ///Get the demurrage period of the current block number
-pub fn actualPeriod(
+pub fn actual_period(
     now_timestamp: Timestamp, // _env.block.time
     state: &mut State,
 )-> u128 {
@@ -278,14 +278,14 @@ pub fn get_distribution(
     deps: &mut DepsMut, 
     state: &mut State,
 ) -> Result<u128, ContractError> {
-    let mut config = TOKEN_INFO
+    let config = TOKEN_INFO
     .may_load(deps.storage)?
     .ok_or(ContractError::Unauthorized {})?;
 
     let difference : u128;
 
-    difference = config.total_supply.u128() * (resolutionFactor- (state.demurrage_amount * 1000000000));
-    return Ok(difference/ resolutionFactor);
+    difference = config.total_supply.u128() * (RESOLUTION_FACTOR- (state.demurrage_amount * 1000000000));
+    return Ok(difference/ RESOLUTION_FACTOR);
 }
 
 ///Default apply demurrage function, no limitations
@@ -306,31 +306,31 @@ pub fn apply_demurrage_limited(
     state: &mut State,
     rounds: u64,
 ) -> bool{
-    let mut periodCount: u64;
-    let lastDemurrageAmount: u128;
+    let mut period_count: u64;
+    let last_demurrage_amount: u128;
     
-    periodCount = getMinutesDelta(now_timestamp, state.demurrage_timestamp);
-    if periodCount == 0
+    period_count = get_minutes_delta(now_timestamp, state.demurrage_timestamp);
+    if period_count == 0
     {
         return false;
     }
 
     // safety limit for exponential calculation to ensure that we can always
 	// execute this code no matter how much time passes.	
-    if rounds > 0 && rounds < periodCount
+    if rounds > 0 && rounds < period_count
     {
-        periodCount = rounds;
+        period_count = rounds;
     }
 
-    lastDemurrageAmount = decayBy(state.demurrage_amount, state.tax_level, periodCount);
-    state.demurrage_timestamp.plus_seconds(periodCount * 60);
+    last_demurrage_amount = decay_by(state.demurrage_amount, state.tax_level, period_count);
+    state.demurrage_timestamp.plus_seconds(period_count * 60);
 
     STATE.save(deps.storage, &state);
     return true;
 }
 
 /// Return timestamp of start of period threshold
-fn getPeriodTimeDelta (
+fn get_period_time_delta (
     start_timestamp: Timestamp,
     period_count: u64,
     period_minute: u64
@@ -341,56 +341,56 @@ fn getPeriodTimeDelta (
 
 //check please if it needs to fix the 100000000 value
 /// Inflates the given amount according to the current demurrage modifier
-fn toBaseAmount(
+fn to_base_amount(
     value: u128,
-    demurrageAmount: u128
+    demurrage_amount: u128
 )-> u128{
-    return value *resolutionFactor / (demurrageAmount * 1000000000)
+    return value *RESOLUTION_FACTOR / (demurrage_amount * 1000000000)
 }
 
 
 /// Calculate the time delta in whole minutes passed between given timestamp and current timestamp
-fn getMinutesDelta (
+fn get_minutes_delta (
     now_timestamp: Timestamp, 
     last_timestamp: Timestamp
 ) -> u64{
     return (now_timestamp.seconds() - last_timestamp.seconds())/60
 }
 
-fn growBy (
+fn grow_by (
     value: u128, 
     tax_level: u128,
     period: u64, 
 ) -> u128 {
-    let mut valueFactor: u128; 
-    let truncatedTaxLevel:u128; 
+    let mut value_factor: u128; 
+    let truncaated_tax_level:u128; 
 
-    valueFactor = growthResolutionFactor;
-    truncatedTaxLevel = tax_level / nanoDivider;
+    value_factor = GROWTH_RESOLUTION_FACTOR;
+    truncaated_tax_level = tax_level / NANO_DIVDER;
 
 
     for n in 1..period {
-        valueFactor = valueFactor + ((valueFactor * truncatedTaxLevel)/growthResolutionFactor);
+        value_factor = value_factor + ((value_factor * truncaated_tax_level)/GROWTH_RESOLUTION_FACTOR);
     }
-    return (valueFactor * value) * growthResolutionFactor;
+    return (value_factor * value) * GROWTH_RESOLUTION_FACTOR;
 }
 
-fn decayBy (
+fn decay_by (
     value: u128, 
     tax_level: u128,
     period: u64, 
 ) -> u128 {
-    let mut valueFactor: u128; 
-    let truncatedTaxLevel:u128; 
+    let mut value_factor: u128; 
+    let truncated_tax_level:u128; 
 
-    valueFactor = growthResolutionFactor;
-    truncatedTaxLevel = tax_level / nanoDivider;
+    value_factor = GROWTH_RESOLUTION_FACTOR;
+    truncated_tax_level = tax_level / NANO_DIVDER;
 
 
     for n in 1..period {
-        valueFactor = valueFactor - ((valueFactor * truncatedTaxLevel)/growthResolutionFactor);
+        value_factor = value_factor - ((value_factor * truncated_tax_level)/GROWTH_RESOLUTION_FACTOR);
     }
-    return (valueFactor * value) * growthResolutionFactor;
+    return (value_factor * value) * GROWTH_RESOLUTION_FACTOR;
 }
 
 
@@ -402,11 +402,11 @@ pub fn execute_transfer(
     amount: Uint128,
     mut state: State,
 ) -> Result<Response, ContractError> {
-    let baseValue: u128;
+    let base_value: u128;
 
-    changePeriod(&mut deps, _env, &mut state);
+    change_period(&mut deps, _env, &mut state);
 
-    baseValue = toBaseAmount(amount.u128(), state.demurrage_amount);
+    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
 
     if amount == Uint128::zero() {
         return Err(ContractError::InvalidZeroAmount {});
@@ -424,7 +424,7 @@ pub fn execute_transfer(
     BALANCES.update(
         deps.storage,
         &rcpt_addr,
-        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(baseValue)) },
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_value)) },
     )?;
 
     let res = Response::new()
@@ -450,11 +450,11 @@ pub fn execute_transfer_from(
     // deduct allowance before doing anything else have enough allowance
     deduct_allowance(deps.storage, &owner_addr, &info.sender, &env.block, amount)?;
 
-    let baseValue: u128;
+    let base_value: u128;
 
-    changePeriod(&mut deps, env,  &mut state);
+    change_period(&mut deps, env,  &mut state);
 
-    baseValue = toBaseAmount(amount.u128(), state.demurrage_amount);
+    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
 
 
     BALANCES.update(
@@ -467,7 +467,7 @@ pub fn execute_transfer_from(
     BALANCES.update(
         deps.storage,
         &rcpt_addr,
-        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(baseValue)) },
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_value)) },
     )?;
 
     let res = Response::new()
@@ -544,10 +544,10 @@ pub fn execute_mint(
     }
     TOKEN_INFO.save(deps.storage, &config)?;
 
-    changePeriod(&mut deps, _env, &mut state);
+    change_period(&mut deps, _env, &mut state);
 
-    let baseAmount : u128;
-    baseAmount = toBaseAmount(amount.u128(), state.demurrage_amount);
+    let base_amount : u128;
+    base_amount = to_base_amount(amount.u128(), state.demurrage_amount);
 
 
     // add amount to recipient balance
@@ -555,7 +555,7 @@ pub fn execute_mint(
     BALANCES.update(
         deps.storage,
         &rcpt_addr,
-        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(baseAmount)) },
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_amount)) },
     )?;
 
     let res = Response::new()
