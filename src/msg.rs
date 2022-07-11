@@ -130,11 +130,11 @@ pub enum ExecuteMsg {
     /// Only with the "mintable" extension. The current minter may set a new minter.
     UpdateMinter { new_minter: String },
 
-    ///Redistritbution the total tax money to the sinked account
-    Redistribution {
-        sink_account: String,
-        amount: Uint128, 
-    },
+    //Redistritbution the total tax money to the sinked account
+    // Redistribution {
+    //     sink_account: String,
+    //     amount: Uint128, 
+    // },
 
 
 }
