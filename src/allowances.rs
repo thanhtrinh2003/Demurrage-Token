@@ -2,84 +2,11 @@ use cosmwasm_std::{
     attr, Addr, Binary, BlockInfo, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
     Storage, Uint128,
 };
-use cw20::{AllowanceResponse, Cw20ReceiveMsg, Expiration};
+use cw20::{AllowanceResponse, Cw20ReceiveMsg};
 
 use crate::error::ContractError;
 use crate::state::{ALLOWANCES, BALANCES, TOKEN_INFO};
 
-pub fn execute_increase_allowance(
-    deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    spender: String,
-    amount: Uint128,
-    expires: Option<Expiration>,
-) -> Result<Response, ContractError> {
-    let spender_addr = deps.api.addr_validate(&spender)?;
-    if spender_addr == info.sender {
-        return Err(ContractError::CannotSetOwnAccount {});
-    }
-
-    ALLOWANCES.update(
-        deps.storage,
-        (&info.sender, &spender_addr),
-        |allow| -> StdResult<_> {
-            let mut val = allow.unwrap_or_default();
-            if let Some(exp) = expires {
-                val.expires = exp;
-            }
-            val.allowance += amount;
-            Ok(val)
-        },
-    )?;
-
-    let res = Response::new().add_attributes(vec![
-        attr("action", "increase_allowance"),
-        attr("owner", info.sender),
-        attr("spender", spender),
-        attr("amount", amount),
-    ]);
-    Ok(res)
-}
-
-pub fn execute_decrease_allowance(
-    deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    spender: String,
-    amount: Uint128,
-    expires: Option<Expiration>,
-) -> Result<Response, ContractError> {
-    let spender_addr = deps.api.addr_validate(&spender)?;
-    if spender_addr == info.sender {
-        return Err(ContractError::CannotSetOwnAccount {});
-    }
-
-    let key = (&info.sender, &spender_addr);
-    // load value and delete if it hits 0, or update otherwise
-    let mut allowance = ALLOWANCES.load(deps.storage, key)?;
-    if amount < allowance.allowance {
-        // update the new amount
-        allowance.allowance = allowance
-            .allowance
-            .checked_sub(amount)
-            .map_err(StdError::overflow)?;
-        if let Some(exp) = expires {
-            allowance.expires = exp;
-        }
-        ALLOWANCES.save(deps.storage, key, &allowance)?;
-    } else {
-        ALLOWANCES.remove(deps.storage, key);
-    }
-
-    let res = Response::new().add_attributes(vec![
-        attr("action", "decrease_allowance"),
-        attr("owner", info.sender),
-        attr("spender", spender),
-        attr("amount", amount),
-    ]);
-    Ok(res)
-}
 
 // this can be used to update a lower allowance - call bucket.update with proper keys
 pub fn deduct_allowance(

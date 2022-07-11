@@ -48,7 +48,7 @@ pub struct State{
 }
 
 impl State{
-    pub fn getCurrentPeriod(&self) -> u64{
+    pub fn get_current_period(&self) -> u64{
         return self.current_period;
     }
 }

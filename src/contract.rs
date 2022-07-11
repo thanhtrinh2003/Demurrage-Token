@@ -1,22 +1,22 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128, Timestamp,
+    to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128, Timestamp, attr, Addr, BlockInfo, Storage
 };
 
 use cw2::set_contract_version;
 use cw20::{
-    BalanceResponse, Cw20Coin, Cw20ReceiveMsg, MinterResponse, TokenInfoResponse,
+    BalanceResponse, Cw20Coin, Cw20ReceiveMsg, MinterResponse, TokenInfoResponse, Expiration, AllowanceResponse,
 };
 
 use crate::allowances::{
-    execute_burn_from, execute_decrease_allowance, execute_increase_allowance, execute_send_from,
-    query_allowance, deduct_allowance,
+    execute_burn_from, execute_send_from,
+    query_allowance,
 };
 use crate::enumerable::{query_all_accounts, query_all_allowances};
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{MinterData, TokenInfo, BALANCES, TOKEN_INFO, State, STATE};
+use crate::state::{MinterData, TokenInfo, BALANCES, TOKEN_INFO, State, STATE, ALLOWANCES};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw20-base";
@@ -147,12 +147,12 @@ pub fn execute(
             spender,
             amount,
             expires,
-        } => execute_increase_allowance(deps, env, info, spender, amount, expires),
+        } => execute_increase_allowance(deps, env, info, spender, amount, expires, state),
         ExecuteMsg::DecreaseAllowance {
             spender,
             amount,
             expires,
-        } => execute_decrease_allowance(deps, env, info, spender, amount, expires),
+        } => execute_decrease_allowance(deps, env, info, spender, amount, expires, state),
         ExecuteMsg::TransferFrom {
             owner,
             recipient,
@@ -168,18 +168,6 @@ pub fn execute(
         ExecuteMsg::UpdateMinter { new_minter } => {
             execute_update_minter(deps, env, info, new_minter)
         },
-
-
-        //ExecuteMsg::DefaultRedistribution { sinked_account, amount } => execute_default_redistribute(deps, env, info, state, address, amount),
-
-        //ExecuteMsg::ChangePeriod {} => execute_change_period(deps, env, info, state, address, amount)
-
-        //ExecuteMsg::IncrementRedistributionParticipations {} => execute_increase_redistribtuion_particioant (deps, env, info, state, address, amount), 
-
-        //ExecuteMsg::Remainder {amount} => execute_remainder(deps, env, info, address, amount),
-
-        //ExecuteMsg::ApplyDemurrage {} => execute_apply_demurrage(deps, env, info, state, aaddress, amount)
-
     }
 }
 
@@ -205,25 +193,8 @@ pub fn apply_default_redistribution(
 }
 
 
-/// Add an entered demurrage period to the redistribution array
-// pub fn checkPeriod(
-//     deps: DepsMut,            
-//     _env: Env, 
-//     info: MessageInfo, 
-//     state: State,
-// ) -> () {
-//     let current_period :u128;
-//     current_period = actualPeriod(deps, _env, info, state);
-//     if (currentPeriod <= state.current_period)
-//     {
-//         return 0;
-//     }
-//     else
-// }
-
-
 ///Amount of demurrage cycles inbetween the current timestamp and the given target time
-pub fn demurrageCycles(
+pub fn demurrage_cycles(
     now_timestamp: Timestamp, // _env.block.time.
     target: Timestamp,
 ) -> u64 {
@@ -240,9 +211,9 @@ pub fn change_period(
     let current_timestamp: Timestamp = _env.block.time;
     apply_demurrage(deps, current_timestamp, state);
     let next_period: u64 = state.current_period + 1;
-    let period_timestamp: Timestamp = get_period_time_delta(state.start_timestamp, state.getCurrentPeriod(), state.period_minute);
+    let period_timestamp: Timestamp = get_period_time_delta(state.start_timestamp, state.get_current_period(), state.period_minute);
     let current_demurrage_amount: u128 = state.demurrage_amount;
-    let demurrage_counts: u64= demurrageCycles(current_timestamp, period_timestamp);
+    let demurrage_counts: u64= demurrage_cycles(current_timestamp, period_timestamp);
     let next_demurrage_amount: u128;
     if demurrage_counts > 0
     {
@@ -323,6 +294,7 @@ pub fn apply_demurrage_limited(
     }
 
     last_demurrage_amount = decay_by(state.demurrage_amount, state.tax_level, period_count);
+    state.demurrage_amount = last_demurrage_amount;
     state.demurrage_timestamp.plus_seconds(period_count * 60);
 
     STATE.save(deps.storage, &state);
@@ -544,10 +516,10 @@ pub fn execute_mint(
     }
     TOKEN_INFO.save(deps.storage, &config)?;
 
-    change_period(&mut deps, _env, &mut state);
+    change_period(&mut deps, _env, &mut state); 
 
-    let base_amount : u128;
-    base_amount = to_base_amount(amount.u128(), state.demurrage_amount);
+    let base_value : u128;
+    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
 
 
     // add amount to recipient balance
@@ -555,7 +527,7 @@ pub fn execute_mint(
     BALANCES.update(
         deps.storage,
         &rcpt_addr,
-        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_amount)) },
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_value)) },
     )?;
 
     let res = Response::new()
@@ -638,6 +610,115 @@ pub fn execute_update_minter(
         .add_attribute("new_minter", new_minter))
 }
 
+//ALLOWANCE:__rust_force_expr!
+pub fn execute_increase_allowance(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    spender: String,
+    amount: Uint128,
+    expires: Option<Expiration>,
+    mut state: State, 
+) -> Result<Response, ContractError> {
+    let spender_addr = deps.api.addr_validate(&spender)?;
+    if spender_addr == info.sender {
+        return Err(ContractError::CannotSetOwnAccount {});
+    }
+
+    let base_value: u128;
+    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
+
+    ALLOWANCES.update(
+        deps.storage,
+        (&info.sender, &spender_addr),
+        |allow| -> StdResult<_> {
+            let mut val = allow.unwrap_or_default();
+            if let Some(exp) = expires {
+                val.expires = exp;
+            }
+            val.allowance += amount + Uint128::from(base_value);
+            Ok(val)
+        },
+    )?;
+
+    let res = Response::new().add_attributes(vec![
+        attr("action", "increase_allowance"),
+        attr("owner", info.sender),
+        attr("spender", spender),
+        attr("amount", amount),
+    ]);
+    Ok(res)
+}
+
+pub fn execute_decrease_allowance(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    spender: String,
+    amount: Uint128,
+    expires: Option<Expiration>,
+    state: State, 
+) -> Result<Response, ContractError> {
+    let spender_addr = deps.api.addr_validate(&spender)?;
+    if spender_addr == info.sender {
+        return Err(ContractError::CannotSetOwnAccount {});
+    }
+
+    let key = (&info.sender, &spender_addr);
+    // load value and delete if it hits 0, or update otherwise
+    let mut allowance = ALLOWANCES.load(deps.storage, key)?;
+    if amount < allowance.allowance {
+        // update the new amount
+        allowance.allowance = allowance
+            .allowance
+            .checked_sub(amount)
+            .map_err(StdError::overflow)?;
+        if let Some(exp) = expires {
+            allowance.expires = exp;
+        }
+        ALLOWANCES.save(deps.storage, key, &allowance)?;
+    } else {
+        ALLOWANCES.remove(deps.storage, key);
+    }
+
+    let res = Response::new().add_attributes(vec![
+        attr("action", "decrease_allowance"),
+        attr("owner", info.sender),
+        attr("spender", spender),
+        attr("amount", amount),
+    ]);
+    Ok(res)
+}
+
+// this can be used to update a lower allowance - call bucket.update with proper keys
+pub fn deduct_allowance(
+    storage: &mut dyn Storage,
+    owner: &Addr,
+    spender: &Addr,
+    block: &BlockInfo,
+    amount: Uint128,
+) -> Result<AllowanceResponse, ContractError> {
+    ALLOWANCES.update(storage, (owner, spender), |current| {
+        match current {
+            Some(mut a) => {
+                if a.expires.is_expired(block) {
+                    Err(ContractError::Expired {})
+                } else {
+                    // deduct the allowance if enough
+                    a.allowance = a
+                        .allowance
+                        .checked_sub(amount)
+                        .map_err(StdError::overflow)?;
+                    Ok(a)
+                }
+            }
+            None => Err(ContractError::NoAllowance {}),
+        }
+    })
+}
+
+
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
@@ -688,6 +769,9 @@ pub fn query_minter(deps: Deps) -> StdResult<Option<MinterResponse>> {
     };
     Ok(minter)
 }
+
+
+
 
 // #[cfg(test)]
 // mod tests {
