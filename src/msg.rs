@@ -129,18 +129,6 @@ pub enum ExecuteMsg {
     Mint { recipient: String, amount: Uint128 },
     /// Only with the "mintable" extension. The current minter may set a new minter.
     UpdateMinter { new_minter: String },
-    /// Only with the "marketing" extension. If authorized, updates marketing metadata.
-    /// Setting None/null for any of these will leave it unchanged.
-    /// Setting Some("") will clear this field on the contract storage
-    UpdateMarketing {
-        /// A URL pointing to the project behind this token.
-        project: Option<String>,
-        /// A longer description of the token and it's utility. Designed for tooltips or such
-        description: Option<String>,
-        /// The address (if any) who can update this data structure
-        marketing: Option<String>,
-    },
-
 
     ///Redistritbution the total tax money to the sinked account
     Redistribution {
@@ -148,8 +136,7 @@ pub enum ExecuteMsg {
         amount: Uint128, 
     },
 
-    /// If set as the "marketing" role on the contract, upload a new URL, SVG, or PNG for the token
-    UploadLogo(Logo),
+
 }
 
 
@@ -186,14 +173,4 @@ pub enum QueryMsg {
         start_after: Option<String>,
         limit: Option<u32>,
     },
-    /// Only with "marketing" extension
-    /// Returns more metadata on the contract to display in the client:
-    /// - description, logo, project url, etc.
-    /// Return type: MarketingInfoResponse
-    MarketingInfo {},
-    /// Only with "marketing" extension
-    /// Downloads the embedded logo data (if stored on chain). Errors if no logo data is stored for this
-    /// contract.
-    /// Return type: DownloadLogoResponse.
-    DownloadLogo {},
 }

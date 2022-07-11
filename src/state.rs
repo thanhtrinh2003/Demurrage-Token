@@ -31,7 +31,7 @@ impl TokenInfo {
 
 
 //demurrage state
-#[derive(Serialize, Deserialize, Copy, Clone, PartialEq, JsonSchema, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
 pub struct State{   
     //timestamp of the initiation
     pub start_timestamp: Timestamp,
