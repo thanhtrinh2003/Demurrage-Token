@@ -18,6 +18,7 @@ use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::{MinterData, TokenInfo, BALANCES, TOKEN_INFO, State, STATE, ALLOWANCES};
 
+
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw20-base";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,6 +26,19 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const NANO_DIVDER: u128 = 100000000000000000000000000;
 const GROWTH_RESOLUTION_FACTOR: u128 = 1000000000000;
 const RESOLUTION_FACTOR: u128 = NANO_DIVDER * GROWTH_RESOLUTION_FACTOR; //this value may get out of bound
+
+
+/*
+    *******************
+    *******************
+    *******************
+    INITIATION PART 
+    *******************
+    *******************
+    *******************
+    *******************
+*/
+
 
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -124,17 +138,28 @@ pub fn validate_accounts(accounts: &[Cw20Coin]) -> Result<(), ContractError> {
 }
 
 
+/*
+    *******************
+    *******************
+    *******************
+    EXECUTE FUNCTIONS
+    *******************
+    *******************
+    *******************
+    *******************
+*/
+
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
-    state: State,
 ) -> Result<Response, ContractError> {
     match msg {
         ExecuteMsg::Transfer { recipient, amount } => {
-            execute_transfer(deps, env, info, recipient, amount, state)
+            execute_transfer(deps, env, info, recipient, amount)
         }
         ExecuteMsg::Burn { amount } => execute_burn(deps, env, info, amount),
         ExecuteMsg::Send {
@@ -142,22 +167,22 @@ pub fn execute(
             amount,
             msg,
         } => execute_send(deps, env, info, contract, amount, msg),
-        ExecuteMsg::Mint { recipient, amount } => execute_mint(deps, env, info, recipient, amount, state),
+        ExecuteMsg::Mint { recipient, amount } => execute_mint(deps, env, info, recipient, amount),
         ExecuteMsg::IncreaseAllowance {
             spender,
             amount,
             expires,
-        } => execute_increase_allowance(deps, env, info, spender, amount, expires, state),
+        } => execute_increase_allowance(deps, env, info, spender, amount, expires),
         ExecuteMsg::DecreaseAllowance {
             spender,
             amount,
             expires,
-        } => execute_decrease_allowance(deps, env, info, spender, amount, expires, state),
+        } => execute_decrease_allowance(deps, env, info, spender, amount, expires),
         ExecuteMsg::TransferFrom {
             owner,
             recipient,
             amount,
-        } => execute_transfer_from(deps, env, info, owner, recipient, amount, state),
+        } => execute_transfer_from(deps, env, info, owner, recipient, amount),
         ExecuteMsg::BurnFrom { owner, amount } => execute_burn_from(deps, env, info, owner, amount),
         ExecuteMsg::SendFrom {
             owner,
@@ -168,8 +193,387 @@ pub fn execute(
         ExecuteMsg::UpdateMinter { new_minter } => {
             execute_update_minter(deps, env, info, new_minter)
         },
+
+        //ExecuteMsg::chagnge_sink_account
+        //ExecuteMsg::change_tax_level  //demurrage rate
+
     }
 }
+
+pub fn execute_transfer(
+    mut deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    recipient: String,
+    amount: Uint128,
+) -> Result<Response, ContractError> {
+
+    let mut state = STATE
+    .may_load(deps.storage)?
+    .ok_or(ContractError::Unauthorized {})?;
+
+    let base_value: u128;
+    change_period(&mut deps, _env, &mut state);
+    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
+
+    if amount == Uint128::zero() {
+        return Err(ContractError::InvalidZeroAmount {});
+    }
+
+    let rcpt_addr = deps.api.addr_validate(&recipient)?;
+
+    BALANCES.update(
+        deps.storage,
+        &info.sender,
+        |balance: Option<Uint128>| -> StdResult<_> {
+            Ok(balance.unwrap_or_default().checked_sub(amount)?)
+        },
+    )?;
+    BALANCES.update(
+        deps.storage,
+        &rcpt_addr,
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_value)) },
+    )?;
+
+    let res = Response::new()
+        .add_attribute("action", "transfer")
+        .add_attribute("from", info.sender)
+        .add_attribute("to", recipient)
+        .add_attribute("amount", amount);
+    Ok(res)
+}
+
+pub fn execute_transfer_from(
+    mut deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    owner: String,
+    recipient: String,
+    amount: Uint128,
+) -> Result<Response, ContractError> {
+    let rcpt_addr = deps.api.addr_validate(&recipient)?;
+    let owner_addr = deps.api.addr_validate(&owner)?;
+
+    // deduct allowance before doing anything else have enough allowance
+    deduct_allowance(deps.storage, &owner_addr, &info.sender, &env.block, amount)?;
+
+    let mut state = STATE
+    .may_load(deps.storage)?
+    .ok_or(ContractError::Unauthorized {})?;
+
+    let base_value: u128;
+
+    change_period(&mut deps, env,  &mut state);
+
+    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
+
+
+    BALANCES.update(
+        deps.storage,
+        &owner_addr,
+        |balance: Option<Uint128>| -> StdResult<_> {
+            Ok(balance.unwrap_or_default().checked_sub(amount)?)
+        },
+    )?;
+    BALANCES.update(
+        deps.storage,
+        &rcpt_addr,
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_value)) },
+    )?;
+
+    let res = Response::new()
+        .add_attribute("action", "transfer")
+        .add_attribute("from", owner)
+        .add_attribute("to", recipient)
+        .add_attribute("amount", amount);
+    Ok(res)
+}
+
+pub fn execute_burn(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    amount: Uint128,
+) -> Result<Response, ContractError> {
+    if amount == Uint128::zero() {
+        return Err(ContractError::InvalidZeroAmount {});
+    }
+
+    // lower balance
+    BALANCES.update(
+        deps.storage,
+        &info.sender,
+        |balance: Option<Uint128>| -> StdResult<_> {
+            Ok(balance.unwrap_or_default().checked_sub(amount)?)
+        },
+    )?;
+    // reduce total_supply
+    TOKEN_INFO.update(deps.storage, |mut info| -> StdResult<_> {
+        info.total_supply = info.total_supply.checked_sub(amount)?;
+        Ok(info)
+    })?;
+
+    let res = Response::new()
+        .add_attribute("action", "burn")
+        .add_attribute("from", info.sender)
+        .add_attribute("amount", amount);
+    Ok(res)
+}
+
+pub fn execute_mint(
+    mut deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    recipient: String,
+    amount: Uint128,
+    
+) -> Result<Response, ContractError> {
+    if amount == Uint128::zero() {
+        return Err(ContractError::InvalidZeroAmount {});
+    }
+
+    let mut config = TOKEN_INFO
+        .may_load(deps.storage)?
+        .ok_or(ContractError::Unauthorized {})?;
+
+    let mut state = STATE
+    .may_load(deps.storage)?
+    .ok_or(ContractError::Unauthorized {})?;
+
+
+    if config
+        .mint
+        .as_ref()
+        .ok_or(ContractError::Unauthorized {})?
+        .minter
+        != info.sender
+    {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    // update supply and enforce cap
+    config.total_supply += amount;
+    if let Some(limit) = config.get_cap() {
+        if config.total_supply > limit {
+            return Err(ContractError::CannotExceedCap {});
+        }
+    }
+    TOKEN_INFO.save(deps.storage, &config)?;
+
+    change_period(&mut deps, _env, &mut state); 
+
+    let base_value : u128;
+    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
+
+
+    // add amount to recipient balance
+    let rcpt_addr = deps.api.addr_validate(&recipient)?;
+    BALANCES.update(
+        deps.storage,
+        &rcpt_addr,
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_value)) },
+    )?;
+
+    let res = Response::new()
+        .add_attribute("action", "mint")
+        .add_attribute("to", recipient)
+        .add_attribute("amount", amount);
+    Ok(res)
+}
+
+pub fn execute_send(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    contract: String,
+    amount: Uint128,
+    msg: Binary,
+) -> Result<Response, ContractError> {
+    if amount == Uint128::zero() {
+        return Err(ContractError::InvalidZeroAmount {});
+    }
+
+    let rcpt_addr = deps.api.addr_validate(&contract)?;
+
+    // move the tokens to the contract
+    BALANCES.update(
+        deps.storage,
+        &info.sender,
+        |balance: Option<Uint128>| -> StdResult<_> {
+            Ok(balance.unwrap_or_default().checked_sub(amount)?)
+        },
+    )?;
+    BALANCES.update(
+        deps.storage,
+        &rcpt_addr,
+        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + amount) },
+    )?;
+
+    let res = Response::new()
+        .add_attribute("action", "send")
+        .add_attribute("from", &info.sender)
+        .add_attribute("to", &contract)
+        .add_attribute("amount", amount)
+        .add_message(
+            Cw20ReceiveMsg {
+                sender: info.sender.into(),
+                amount,
+                msg,
+            }
+            .into_cosmos_msg(contract)?,
+        );
+    Ok(res)
+}
+
+pub fn execute_update_minter(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    new_minter: String,
+) -> Result<Response, ContractError> {
+    let mut config = TOKEN_INFO
+        .may_load(deps.storage)?
+        .ok_or(ContractError::Unauthorized {})?;
+
+    let mint = config.mint.as_ref().ok_or(ContractError::Unauthorized {})?;
+    if mint.minter != info.sender {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let minter = deps.api.addr_validate(&new_minter)?;
+    let minter_data = MinterData {
+        minter,
+        cap: mint.cap,
+    };
+    config.mint = Some(minter_data);
+
+    TOKEN_INFO.save(deps.storage, &config)?;
+
+    Ok(Response::default()
+        .add_attribute("action", "update_minter")
+        .add_attribute("new_minter", new_minter))
+}
+
+//ALLOWANCE:__rust_force_expr!
+pub fn execute_increase_allowance(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    spender: String,
+    amount: Uint128,
+    expires: Option<Expiration>,
+) -> Result<Response, ContractError> {
+    let spender_addr = deps.api.addr_validate(&spender)?;
+    if spender_addr == info.sender {
+        return Err(ContractError::CannotSetOwnAccount {});
+    }
+
+    let mut state = STATE
+    .may_load(deps.storage)?
+    .ok_or(ContractError::Unauthorized {})?;
+
+    let base_value: u128;
+    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
+
+    ALLOWANCES.update(
+        deps.storage,
+        (&info.sender, &spender_addr),
+        |allow| -> StdResult<_> {
+            let mut val = allow.unwrap_or_default();
+            if let Some(exp) = expires {
+                val.expires = exp;
+            }
+            val.allowance += amount + Uint128::from(base_value);
+            Ok(val)
+        },
+    )?;
+
+    let res = Response::new().add_attributes(vec![
+        attr("action", "increase_allowance"),
+        attr("owner", info.sender),
+        attr("spender", spender),
+        attr("amount", amount),
+    ]);
+    Ok(res)
+}
+
+pub fn execute_decrease_allowance(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    spender: String,
+    amount: Uint128,
+    expires: Option<Expiration>,
+) -> Result<Response, ContractError> {
+    let spender_addr = deps.api.addr_validate(&spender)?;
+    if spender_addr == info.sender {
+        return Err(ContractError::CannotSetOwnAccount {});
+    }
+
+    let key = (&info.sender, &spender_addr);
+    // load value and delete if it hits 0, or update otherwise
+    let mut allowance = ALLOWANCES.load(deps.storage, key)?;
+    if amount < allowance.allowance {
+        // update the new amount
+        allowance.allowance = allowance
+            .allowance
+            .checked_sub(amount)
+            .map_err(StdError::overflow)?;
+        if let Some(exp) = expires {
+            allowance.expires = exp;
+        }
+        ALLOWANCES.save(deps.storage, key, &allowance)?;
+    } else {
+        ALLOWANCES.remove(deps.storage, key);
+    }
+
+    let res = Response::new().add_attributes(vec![
+        attr("action", "decrease_allowance"),
+        attr("owner", info.sender),
+        attr("spender", spender),
+        attr("amount", amount),
+    ]);
+    Ok(res)
+}
+
+// this can be used to update a lower allowance - call bucket.update with proper keys
+pub fn deduct_allowance(
+    storage: &mut dyn Storage,
+    owner: &Addr,
+    spender: &Addr,
+    block: &BlockInfo,
+    amount: Uint128,
+) -> Result<AllowanceResponse, ContractError> {
+    ALLOWANCES.update(storage, (owner, spender), |current| {
+        match current {
+            Some(mut a) => {
+                if a.expires.is_expired(block) {
+                    Err(ContractError::Expired {})
+                } else {
+                    // deduct the allowance if enough
+                    a.allowance = a
+                        .allowance
+                        .checked_sub(amount)
+                        .map_err(StdError::overflow)?;
+                    Ok(a)
+                }
+            }
+            None => Err(ContractError::NoAllowance {}),
+        }
+    })
+}
+
+
+/*
+    *******************
+    *******************
+    *******************
+    DEMURRAGE FUNCTIONS
+    *******************
+    *******************
+    *******************
+    *******************
+*/
 
 /// Apply Default Redistribution: all amounts go to sink address
 pub fn apply_default_redistribution(
@@ -366,356 +770,16 @@ fn decay_by (
 }
 
 
-pub fn execute_transfer(
-    mut deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    recipient: String,
-    amount: Uint128,
-    mut state: State,
-) -> Result<Response, ContractError> {
-    let base_value: u128;
-
-    change_period(&mut deps, _env, &mut state);
-
-    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
-
-    if amount == Uint128::zero() {
-        return Err(ContractError::InvalidZeroAmount {});
-    }
-
-    let rcpt_addr = deps.api.addr_validate(&recipient)?;
-
-    BALANCES.update(
-        deps.storage,
-        &info.sender,
-        |balance: Option<Uint128>| -> StdResult<_> {
-            Ok(balance.unwrap_or_default().checked_sub(amount)?)
-        },
-    )?;
-    BALANCES.update(
-        deps.storage,
-        &rcpt_addr,
-        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_value)) },
-    )?;
-
-    let res = Response::new()
-        .add_attribute("action", "transfer")
-        .add_attribute("from", info.sender)
-        .add_attribute("to", recipient)
-        .add_attribute("amount", amount);
-    Ok(res)
-}
-
-pub fn execute_transfer_from(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    owner: String,
-    recipient: String,
-    amount: Uint128,
-    mut state: State, 
-) -> Result<Response, ContractError> {
-    let rcpt_addr = deps.api.addr_validate(&recipient)?;
-    let owner_addr = deps.api.addr_validate(&owner)?;
-
-    // deduct allowance before doing anything else have enough allowance
-    deduct_allowance(deps.storage, &owner_addr, &info.sender, &env.block, amount)?;
-
-    let base_value: u128;
-
-    change_period(&mut deps, env,  &mut state);
-
-    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
-
-
-    BALANCES.update(
-        deps.storage,
-        &owner_addr,
-        |balance: Option<Uint128>| -> StdResult<_> {
-            Ok(balance.unwrap_or_default().checked_sub(amount)?)
-        },
-    )?;
-    BALANCES.update(
-        deps.storage,
-        &rcpt_addr,
-        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_value)) },
-    )?;
-
-    let res = Response::new()
-        .add_attribute("action", "transfer")
-        .add_attribute("from", owner)
-        .add_attribute("to", recipient)
-        .add_attribute("amount", amount);
-    Ok(res)
-}
-
-pub fn execute_burn(
-    deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    amount: Uint128,
-) -> Result<Response, ContractError> {
-    if amount == Uint128::zero() {
-        return Err(ContractError::InvalidZeroAmount {});
-    }
-
-    // lower balance
-    BALANCES.update(
-        deps.storage,
-        &info.sender,
-        |balance: Option<Uint128>| -> StdResult<_> {
-            Ok(balance.unwrap_or_default().checked_sub(amount)?)
-        },
-    )?;
-    // reduce total_supply
-    TOKEN_INFO.update(deps.storage, |mut info| -> StdResult<_> {
-        info.total_supply = info.total_supply.checked_sub(amount)?;
-        Ok(info)
-    })?;
-
-    let res = Response::new()
-        .add_attribute("action", "burn")
-        .add_attribute("from", info.sender)
-        .add_attribute("amount", amount);
-    Ok(res)
-}
-
-pub fn execute_mint(
-    mut deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    recipient: String,
-    amount: Uint128,
-    mut state: State, 
-) -> Result<Response, ContractError> {
-    if amount == Uint128::zero() {
-        return Err(ContractError::InvalidZeroAmount {});
-    }
-
-    let mut config = TOKEN_INFO
-        .may_load(deps.storage)?
-        .ok_or(ContractError::Unauthorized {})?;
-
-    if config
-        .mint
-        .as_ref()
-        .ok_or(ContractError::Unauthorized {})?
-        .minter
-        != info.sender
-    {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // update supply and enforce cap
-    config.total_supply += amount;
-    if let Some(limit) = config.get_cap() {
-        if config.total_supply > limit {
-            return Err(ContractError::CannotExceedCap {});
-        }
-    }
-    TOKEN_INFO.save(deps.storage, &config)?;
-
-    change_period(&mut deps, _env, &mut state); 
-
-    let base_value : u128;
-    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
-
-
-    // add amount to recipient balance
-    let rcpt_addr = deps.api.addr_validate(&recipient)?;
-    BALANCES.update(
-        deps.storage,
-        &rcpt_addr,
-        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_value)) },
-    )?;
-
-    let res = Response::new()
-        .add_attribute("action", "mint")
-        .add_attribute("to", recipient)
-        .add_attribute("amount", amount);
-    Ok(res)
-}
-
-pub fn execute_send(
-    deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    contract: String,
-    amount: Uint128,
-    msg: Binary,
-) -> Result<Response, ContractError> {
-    if amount == Uint128::zero() {
-        return Err(ContractError::InvalidZeroAmount {});
-    }
-
-    let rcpt_addr = deps.api.addr_validate(&contract)?;
-
-    // move the tokens to the contract
-    BALANCES.update(
-        deps.storage,
-        &info.sender,
-        |balance: Option<Uint128>| -> StdResult<_> {
-            Ok(balance.unwrap_or_default().checked_sub(amount)?)
-        },
-    )?;
-    BALANCES.update(
-        deps.storage,
-        &rcpt_addr,
-        |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + amount) },
-    )?;
-
-    let res = Response::new()
-        .add_attribute("action", "send")
-        .add_attribute("from", &info.sender)
-        .add_attribute("to", &contract)
-        .add_attribute("amount", amount)
-        .add_message(
-            Cw20ReceiveMsg {
-                sender: info.sender.into(),
-                amount,
-                msg,
-            }
-            .into_cosmos_msg(contract)?,
-        );
-    Ok(res)
-}
-
-pub fn execute_update_minter(
-    deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    new_minter: String,
-) -> Result<Response, ContractError> {
-    let mut config = TOKEN_INFO
-        .may_load(deps.storage)?
-        .ok_or(ContractError::Unauthorized {})?;
-
-    let mint = config.mint.as_ref().ok_or(ContractError::Unauthorized {})?;
-    if mint.minter != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    let minter = deps.api.addr_validate(&new_minter)?;
-    let minter_data = MinterData {
-        minter,
-        cap: mint.cap,
-    };
-    config.mint = Some(minter_data);
-
-    TOKEN_INFO.save(deps.storage, &config)?;
-
-    Ok(Response::default()
-        .add_attribute("action", "update_minter")
-        .add_attribute("new_minter", new_minter))
-}
-
-//ALLOWANCE:__rust_force_expr!
-pub fn execute_increase_allowance(
-    deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    spender: String,
-    amount: Uint128,
-    expires: Option<Expiration>,
-    mut state: State, 
-) -> Result<Response, ContractError> {
-    let spender_addr = deps.api.addr_validate(&spender)?;
-    if spender_addr == info.sender {
-        return Err(ContractError::CannotSetOwnAccount {});
-    }
-
-    let base_value: u128;
-    base_value = to_base_amount(amount.u128(), state.demurrage_amount);
-
-    ALLOWANCES.update(
-        deps.storage,
-        (&info.sender, &spender_addr),
-        |allow| -> StdResult<_> {
-            let mut val = allow.unwrap_or_default();
-            if let Some(exp) = expires {
-                val.expires = exp;
-            }
-            val.allowance += amount + Uint128::from(base_value);
-            Ok(val)
-        },
-    )?;
-
-    let res = Response::new().add_attributes(vec![
-        attr("action", "increase_allowance"),
-        attr("owner", info.sender),
-        attr("spender", spender),
-        attr("amount", amount),
-    ]);
-    Ok(res)
-}
-
-pub fn execute_decrease_allowance(
-    deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    spender: String,
-    amount: Uint128,
-    expires: Option<Expiration>,
-    state: State, 
-) -> Result<Response, ContractError> {
-    let spender_addr = deps.api.addr_validate(&spender)?;
-    if spender_addr == info.sender {
-        return Err(ContractError::CannotSetOwnAccount {});
-    }
-
-    let key = (&info.sender, &spender_addr);
-    // load value and delete if it hits 0, or update otherwise
-    let mut allowance = ALLOWANCES.load(deps.storage, key)?;
-    if amount < allowance.allowance {
-        // update the new amount
-        allowance.allowance = allowance
-            .allowance
-            .checked_sub(amount)
-            .map_err(StdError::overflow)?;
-        if let Some(exp) = expires {
-            allowance.expires = exp;
-        }
-        ALLOWANCES.save(deps.storage, key, &allowance)?;
-    } else {
-        ALLOWANCES.remove(deps.storage, key);
-    }
-
-    let res = Response::new().add_attributes(vec![
-        attr("action", "decrease_allowance"),
-        attr("owner", info.sender),
-        attr("spender", spender),
-        attr("amount", amount),
-    ]);
-    Ok(res)
-}
-
-// this can be used to update a lower allowance - call bucket.update with proper keys
-pub fn deduct_allowance(
-    storage: &mut dyn Storage,
-    owner: &Addr,
-    spender: &Addr,
-    block: &BlockInfo,
-    amount: Uint128,
-) -> Result<AllowanceResponse, ContractError> {
-    ALLOWANCES.update(storage, (owner, spender), |current| {
-        match current {
-            Some(mut a) => {
-                if a.expires.is_expired(block) {
-                    Err(ContractError::Expired {})
-                } else {
-                    // deduct the allowance if enough
-                    a.allowance = a
-                        .allowance
-                        .checked_sub(amount)
-                        .map_err(StdError::overflow)?;
-                    Ok(a)
-                }
-            }
-            None => Err(ContractError::NoAllowance {}),
-        }
-    })
-}
+/*
+    *******************
+    *******************
+    *******************
+    QUERY FUNCTIONS
+    *******************
+    *******************
+    *******************
+    *******************
+*/
 
 
 
@@ -736,6 +800,10 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::AllAccounts { start_after, limit } => {
             to_binary(&query_all_accounts(deps, start_after, limit)?)
         }
+        //QueryMsg::DemurrageAmount {} => to_binary(&query_demurrage_amount(deps)?,
+        //QueryMsg::TaxLevel =>
+        //QueryMsg::SinkAccount =>
+        
     }
 }
 
@@ -769,6 +837,11 @@ pub fn query_minter(deps: Deps) -> StdResult<Option<MinterResponse>> {
     };
     Ok(minter)
 }
+
+// pub fn guery_demurrage_amount(deps: Deps) -> StdResult<Option<DemurrageAmountResponse>>{
+//     let state = STATE.load(deps.storage)?;
+//     Ok(state.demurrage_amount);
+// }
 
 
 
