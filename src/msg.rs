@@ -19,7 +19,6 @@ pub struct InstantiateMsg {
     pub decimals: u32,
     pub initial_balances: Vec<Cw20Coin>,
     pub mint: Option<MinterResponse>,
-    pub marketing: Option<InstantiateMarketingInfo>,
     
     // demurrage variable 
     pub tax_level_minute: u128,
@@ -130,13 +129,10 @@ pub enum ExecuteMsg {
     /// Only with the "mintable" extension. The current minter may set a new minter.
     UpdateMinter { new_minter: String },
 
-    //Redistritbution the total tax money to the sinked account
-    // Redistribution {
-    //     sink_account: String,
-    //     amount: Uint128, 
-    // },
+    /// Change sink address, where store all the demurrage tax
+    ChangeSinkAddress { address: String }, 
 
-
+    ChangeTaxLevel { amount: u128 },
 }
 
 
@@ -173,4 +169,13 @@ pub enum QueryMsg {
         start_after: Option<String>,
         limit: Option<u32>,
     },
+    /// Returns the current demurrage amount (total taxes)
+    /// Return type: DemurrageAmountResponse
+    DemurrageAmount {}, 
+    /// Returns the current tax level for demurrage activities 
+    /// Return type: TaxLevelResponse
+    TaxLevel {}, 
+    /// Returns the current sink account address (where stores most of the distribution)
+    /// Return type: SinkAccountResponse 
+    SinkAccount {}, 
 }

@@ -8,7 +8,8 @@ pub use crate::logo::{EmbeddedLogo, Logo, LogoInfo};
 pub use crate::msg::Cw20ExecuteMsg;
 pub use crate::query::{
     AllAccountsResponse, AllAllowancesResponse, AllowanceInfo, AllowanceResponse, BalanceResponse,
-    Cw20QueryMsg, MinterResponse, TokenInfoResponse,
+    Cw20QueryMsg, MinterResponse, TokenInfoResponse, DemurrageAmountResponse, SinkAddressResponse, 
+    TaxLevelResponse
 };
 pub use crate::receiver::Cw20ReceiveMsg;
 
