@@ -24,8 +24,9 @@ use crate::state::{MinterData, TokenInfo, BALANCES, TOKEN_INFO, State, STATE, AL
 const CONTRACT_NAME: &str = "crates.io:cw20-base";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const NANO_DIVDER: u128 = 100000000000000000000000000;  //10^27
-const GROWTH_RESOLUTION_FACTOR: u128 = 1000000000000; // 10^12
+const NANO_DIVDER: u128 = 10000000000000;  //10^13
+const GROWTH_RESOLUTION_FACTOR: u128 = 10000000; // 10^7
+
 
 //10^39
 const RESOLUTION_FACTOR: u128 = NANO_DIVDER * GROWTH_RESOLUTION_FACTOR; //this value may get out of bound
@@ -64,7 +65,7 @@ pub fn instantiate(
     let period_duration = msg.period_minutes * 60;
     //demurrageAmount = 100000000000000000000000000000000000000 - _taxLevelMinute; // Represents 38 decimal places, same as resolutionFactor
     //demurrageAmount = 100000000000000000000000000000000000000;
-    let demurrage_amount: u128 = 10000000000000000000000000000; 
+    let demurrage_amount: u128 = 1000000000000000; //10^15
     //demurragePeriod = 1;
     let tax_level = msg.tax_level_minute;
     let base_ten: u32 = 10;
@@ -215,11 +216,11 @@ pub fn execute_change_tax_level(
     .ok_or(ContractError::Unauthorized {})?;
 
     state.tax_level = amount;
-    STATE.save(deps.storage, &state);
+    STATE.save(deps.storage, &state)?;
 
     let res = Response::new()
         .add_attribute("action", "change tax level")
-        .add_attribute("new tax amount", Uint128::from(amount));
+        .add_attribute("new tax amount", Uint128::from(state.tax_level));
     Ok(res)
 }
 
@@ -233,7 +234,7 @@ pub fn execute_change_sink_address(
     .ok_or(ContractError::Unauthorized {})?;
 
     state.sink_address = sink_addr;
-    STATE.save(deps.storage, &state);
+    STATE.save(deps.storage, &state)?;
 
     let res = Response::new()
         .add_attribute("action", "change sink address")
@@ -252,9 +253,9 @@ pub fn execute_transfer(
     let mut state = STATE
     .may_load(deps.storage)?
     .ok_or(ContractError::Unauthorized {})?;
-
-    let base_value: u128;
     change_period(&mut deps, _env, &mut state);
+
+   let base_value: u128; 
     base_value = to_base_amount(amount.u128(), state.demurrage_amount);
 
     if amount == Uint128::zero() {
@@ -628,13 +629,33 @@ pub fn apply_default_redistribution(
         deps.storage,
         &sink_addr,
         |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(distribution))},
-    );  
+    )?;  
 
     let res = Response::new()
     .add_attribute("action", "default_redistribution")
     .add_attribute("amount", distribution.to_string());
     
     Ok(res)
+
+    //BALANCES.update(
+    //     deps.storage,
+    //     &info.sender,
+    //     |balance: Option<Uint128>| -> StdResult<_> {
+    //         Ok(balance.unwrap_or_default().checked_sub(amount)?)
+    //     },
+    // )?;
+    // BALANCES.update(
+    //     deps.storage,
+    //     &rcpt_addr,
+    //     |balance: Option<Uint128>| -> StdResult<_> { Ok(balance.unwrap_or_default() + Uint128::from(base_value)) },
+    // )?;
+
+    // let res = Response::new()
+    //     .add_attribute("action", "transfer")
+    //     .add_attribute("from", info.sender)
+    //     .add_attribute("to", recipient)
+    //     .add_attribute("amount", amount);
+    // Ok(res)
 }
 
 
@@ -643,7 +664,7 @@ pub fn demurrage_cycles(
     now_timestamp: Timestamp, // _env.block.time.
     target: Timestamp,
 ) -> u64 {
-    return now_timestamp.seconds() - target.seconds()/60;
+    return (now_timestamp.seconds() - target.seconds())/60;
 }
 
 
@@ -653,12 +674,33 @@ pub fn change_period(
     _env: Env, 
     state: &mut State,
 ) -> Result<bool, ContractError> {
+    //take current timestamp
     let current_timestamp: Timestamp = _env.block.time;
+    println!("change period, current timestamp: {}", current_timestamp);
+    println!("change period, start_timestamp timestamp: {}", state.start_timestamp);
+
+    //decrease demurrage amount 
     apply_demurrage(deps, current_timestamp, state);
+
+    println!("state.current_period: {}", state.current_period);
+    
     let next_period: u64 = state.current_period + 1;
-    let period_timestamp: Timestamp = get_period_time_delta(state.start_timestamp, state.get_current_period(), state.period_minute);
+
+    println!("state.current_period: {}", state.current_period);
+    println!("period_minute: {}", state.period_minute);
+    println!("start_timestamp: {}", state.start_timestamp);
+
+    let period_timestamp: Timestamp = get_period_time_delta(state.start_timestamp, state.current_period, state.period_minute);
+    
+    println!("current timestamp: {}", current_timestamp.seconds());
+    println!("period timestamp: {} ", period_timestamp.seconds());
     let current_demurrage_amount: u128 = state.demurrage_amount;
     let demurrage_counts: u64= demurrage_cycles(current_timestamp, period_timestamp);
+    
+    
+    println!("different between: {} ", current_timestamp.seconds() - period_timestamp.seconds());
+
+
     let next_demurrage_amount: u128;
     if demurrage_counts > 0
     {
@@ -669,13 +711,14 @@ pub fn change_period(
         next_demurrage_amount = current_demurrage_amount;
     }
 
+    //update the demurrage state 
     state.demurrage_amount = next_demurrage_amount;
     state.current_period = next_period;
-
     STATE.save(deps.storage, &state);
 
+    //send the tax to the sink account 
     let distribution = get_distribution(deps, state)?;
-    apply_default_redistribution(deps, state, distribution);
+    let res = apply_default_redistribution(deps, state, distribution);
 
     return Ok(true);
 }
@@ -698,13 +741,20 @@ pub fn get_distribution(
     .may_load(deps.storage)?
     .ok_or(ContractError::Unauthorized {})?;
 
-    let difference : u128;
+    
+    //testing
+    println!("get_distribution, total supply: {}", config.total_supply.u128());
+    println!("get_distribution, demurrage_amount: {}", state.demurrage_amount);
 
-    difference = config.total_supply.u128() * (RESOLUTION_FACTOR- (state.demurrage_amount * 1000000000));
+
+    let difference : u128;
+    difference = config.total_supply.u128() * (RESOLUTION_FACTOR- (state.demurrage_amount * 100000));
+    
+    
     return Ok(difference/ RESOLUTION_FACTOR);
 }
 
-///Default apply demurrage function, no limitations
+///Default apply demurrage function, no limitations on number of periods 
 ///Refer to execute_apply_demurrage_limited for more information
 pub fn apply_demurrage(
     deps: &mut DepsMut, 
@@ -725,7 +775,11 @@ pub fn apply_demurrage_limited(
     let mut period_count: u64;
     let last_demurrage_amount: u128;
     
+    //determine how many periods between the last time applied demurrage and the current time.
     period_count = get_minutes_delta(now_timestamp, state.demurrage_timestamp);
+
+    println!("apply demurrage, period count: {}", period_count);
+
     if period_count == 0
     {
         return false;
@@ -738,11 +792,15 @@ pub fn apply_demurrage_limited(
         period_count = rounds;
     }
 
+
+    // demurrage amount decayed according to the number of period
     last_demurrage_amount = decay_by(state.demurrage_amount, state.tax_level, period_count);
+    
+    //update state 
     state.demurrage_amount = last_demurrage_amount;
     state.demurrage_timestamp.plus_seconds(period_count * 60);
-
     STATE.save(deps.storage, &state);
+
     return true;
 }
 
@@ -752,7 +810,7 @@ fn get_period_time_delta (
     period_count: u64,
     period_minute: u64
 ) -> Timestamp {
-    return start_timestamp.plus_seconds(period_count * period_minute * 60);
+    return start_timestamp.plus_seconds(period_count * period_minute);
 }
 
 
@@ -762,7 +820,7 @@ fn to_base_amount(
     value: u128,
     demurrage_amount: u128
 )-> u128{
-    return value *RESOLUTION_FACTOR / (demurrage_amount * 1000000000)
+    return value * RESOLUTION_FACTOR / (demurrage_amount * 100000)
 }
 
 
@@ -780,16 +838,15 @@ fn grow_by (
     period: u64, 
 ) -> u128 {
     let mut value_factor: u128; 
-    let truncaated_tax_level:u128; 
+    let truncated_tax_level:u128; 
 
     value_factor = GROWTH_RESOLUTION_FACTOR;
-    truncaated_tax_level = tax_level / NANO_DIVDER;
-
+    truncated_tax_level = tax_level / NANO_DIVDER;
 
     for n in 1..period {
-        value_factor = value_factor + ((value_factor * truncaated_tax_level)/GROWTH_RESOLUTION_FACTOR);
+        value_factor = (value_factor + ((value_factor * truncated_tax_level)/GROWTH_RESOLUTION_FACTOR)) as u128;
     }
-    return (value_factor * value) * GROWTH_RESOLUTION_FACTOR;
+    return (value_factor * value) / GROWTH_RESOLUTION_FACTOR;
 }
 
 fn decay_by (
@@ -803,11 +860,12 @@ fn decay_by (
     value_factor = GROWTH_RESOLUTION_FACTOR;
     truncated_tax_level = tax_level / NANO_DIVDER;
 
-
-    for n in 1..period {
-        value_factor = value_factor - ((value_factor * truncated_tax_level)/GROWTH_RESOLUTION_FACTOR);
+    for n in 1..(period+1) {
+        value_factor = (value_factor - ((value_factor * truncated_tax_level)/GROWTH_RESOLUTION_FACTOR)) as u128;
+        println!("here");
     }
-    return (value_factor * value) * GROWTH_RESOLUTION_FACTOR;
+
+    return (value_factor * value)/ GROWTH_RESOLUTION_FACTOR;
 }
 
 
@@ -960,7 +1018,7 @@ mod tests {
             mint: mint.clone(),
             
             //0.000050105908373373
-            tax_level_minute: 5010590837337000000000000000000, // 38 decimals
+            tax_level_minute: 50105908373373, // 38 decimals
             period_minutes: 1, 
             supply_cap: 10000000, //supply cap is 10 million coins
             sink_address: "sinkaddress".to_string()
@@ -986,8 +1044,6 @@ mod tests {
         meta
     }
 
-    const PNG_HEADER: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-
     mod instantiate {
         use super::*;
 
@@ -1004,7 +1060,7 @@ mod tests {
                     amount,
                 }],
                 mint: None,
-                tax_level_minute: 5010590837337000000000000000000, // 38 decimals
+                tax_level_minute: 50105908373373, // 38 decimals
                 period_minutes: 1, 
                 supply_cap: 10000000, //supply cap is 10 million coins
                 sink_address: "sinkaddress".to_string()
@@ -1047,7 +1103,7 @@ mod tests {
                     minter: minter.clone(),
                     cap: Some(limit),
                 }),
-                tax_level_minute: 5010590837337000000000000000000, // 38 decimals
+                tax_level_minute: 50105908373373, // 38 decimals
                 period_minutes: 1, 
                 supply_cap: 10000000, //supply cap is 10 million coins
                 sink_address: "sinkaddress".to_string(),
@@ -1097,7 +1153,7 @@ mod tests {
                     minter,
                     cap: Some(limit),
                 }),
-                tax_level_minute: 5010590837337000000000000000000, // 38 decimals
+                tax_level_minute: 50105908373373, // 38 decimals
                 period_minutes: 1, 
                 supply_cap: 10000000, //supply cap is 10 million coins
                 sink_address: "sinkaddress".to_string()
@@ -1275,7 +1331,7 @@ mod tests {
                 },
             ],
             mint: None,
-            tax_level_minute: 5010590837337000000000000000000, // 38 decimals
+            tax_level_minute: 50105908373373, // 38 decimals
             period_minutes: 1, 
             supply_cap: 10000000, //supply cap is 10 million coins
             sink_address: "sinkaddress".to_string()
@@ -1301,7 +1357,7 @@ mod tests {
                 },
             ],
             mint: None,
-            tax_level_minute: 5010590837337000000000000000000, // 38 decimals
+            tax_level_minute: 50105908373373, // 38 decimals
             period_minutes: 1, 
             supply_cap: 10000000, //supply cap is 10 million coins
             sink_address: "sinkaddress".to_string()
@@ -1370,9 +1426,13 @@ mod tests {
 
         do_instantiate(deps.as_mut(), &addr1, amount1);
 
+        //start time is 1571797419 from instantiate
+
         // cannot transfer nothing
         let info = mock_info(addr1.as_ref(), &[]);
-        let env = mock_env();
+        let mut env = mock_env();
+        env.block.time = Timestamp::from_seconds(1571797479);
+        
         let msg = ExecuteMsg::Transfer {
             recipient: addr2.clone(),
             amount: Uint128::zero(),
@@ -1382,7 +1442,9 @@ mod tests {
 
         // cannot send more than we have
         let info = mock_info(addr1.as_ref(), &[]);
-        let env = mock_env();
+        let mut env = mock_env();
+        env.block.time = Timestamp::from_seconds(1571797539);
+
         let msg = ExecuteMsg::Transfer {
             recipient: addr2.clone(),
             amount: too_much,
@@ -1392,7 +1454,9 @@ mod tests {
 
         // cannot send from empty account
         let info = mock_info(addr2.as_ref(), &[]);
-        let env = mock_env();
+        let mut env = mock_env();
+
+        env.block.time = Timestamp::from_seconds(1571797659);
         let msg = ExecuteMsg::Transfer {
             recipient: addr1.clone(),
             amount: transfer,
@@ -1402,7 +1466,9 @@ mod tests {
 
         // valid transfer
         let info = mock_info(addr1.as_ref(), &[]);
-        let env = mock_env();
+        let mut env = mock_env();
+
+        env.block.time = Timestamp::from_seconds(1571797719);
         let msg = ExecuteMsg::Transfer {
             recipient: addr2.clone(),
             amount: transfer,
@@ -1558,11 +1624,14 @@ mod tests {
                     amount,
                 }],
                 mint: None,
-                tax_level_minute: 5010590837337000000000000000000, // 38 decimals
+                tax_level_minute: 50105908373373, // 20 decimals
                 period_minutes: 1, 
                 supply_cap: 10000000, //supply cap is 10 million coins
                 sink_address: "sinkaddress".to_string()
             };
+
+            
+
             let info = mock_info("creator", &[]);
             let env = mock_env();
             let res = instantiate(deps.as_mut(), env, info, instantiate_msg).unwrap();
