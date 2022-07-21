@@ -1,9 +1,9 @@
-export const DemurrageToken = (client, fees) => {
+export const CW20_Demurrage = (client, fees) => {
     const use = (contractAddress) => {
         
         //done
         const balance = async (address) => {
-            const result = await client.queryContractSmart(contractAddress, {balance: { address }})
+            const result = await client.queryContractSmart(contractAddress, {balance: { Query }})
             return result.balance
         }
   
@@ -26,6 +26,18 @@ export const DemurrageToken = (client, fees) => {
     
         const minter = async () => {
             return client.queryContractSmart(contractAddress, {minter: { }})
+        }
+
+        const demurrageAmount = async () => {
+            return client.queryContractSmart(contractAddress, {demurrage_amount: { }})
+        }
+
+        const taxLevel = async () => {
+            return client.queryContractSmart(contractAddress, {tax_level: { }})
+        }
+
+        const sinkAddress = async () => {
+            return client.queryContractSmart(contractAddress, {sink_account: { }})
         }
     
         // mints tokens, returns transactionHash
@@ -72,6 +84,16 @@ export const DemurrageToken = (client, fees) => {
             const result = await client.execute(senderAddress, contractAddress, {send_from: {owner, recipient, amount, msg: jsonToBinary(msg)}}, fees.exec)
             return result.transactionHash
         }
+
+        const changeSinkAdress = async (address) => {
+            const result = await client.execute(senderAddress, contractAddress, {change_sink_address: {address}}, fees.exec)
+            return result.transactionHash
+        }
+
+        const changeTaxLevel = async (amount) => {
+            const result = await client.execute(senderAddress, contractAddress, {change_tax_level: {amount}}, fees.exec)
+            return result.transactionHash
+        }
     
         return {
             contractAddress,
@@ -88,8 +110,12 @@ export const DemurrageToken = (client, fees) => {
             decreaseAllowance,
             transferFrom,
             send,
-            sendFrom
+            sendFrom, 
+            changeSinkAdress, 
+            changeTaxLevel, 
+            demurrageAmount, 
+            taxLevel, 
+            sinkAddress,
         }
     }
-  
 }

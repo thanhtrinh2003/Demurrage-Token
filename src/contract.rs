@@ -6,8 +6,7 @@ use cosmwasm_std::{
 
 use cw2::set_contract_version;
 use cw20::{
-    BalanceResponse, Cw20Coin, Cw20ReceiveMsg, MinterResponse, TokenInfoResponse, Expiration, AllowanceResponse, DemurrageAmountResponse, 
-    TaxLevelResponse, SinkAddressResponse
+    BalanceResponse, Cw20Coin, Cw20ReceiveMsg, MinterResponse, TokenInfoResponse, Expiration, AllowanceResponse,  
 };
 
 use crate::allowances::{
@@ -18,7 +17,7 @@ use crate::enumerable::{query_all_accounts, query_all_allowances};
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::{MinterData, TokenInfo, BALANCES, TOKEN_INFO, State, STATE, ALLOWANCES};
-
+use crate::query::{DemurrageAmountResponse, SinkAddressResponse, TaxLevelResponse};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw20-base";
