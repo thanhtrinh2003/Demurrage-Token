@@ -1,0 +1,1 @@
+2e142b63bfca94a1f2687f006ddf3235359cb2a745b92de4d7edce62c7202a83  ./target/wasm32-unknown-unknown/release/demurrage_token.wasm

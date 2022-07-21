@@ -1,0 +1,1 @@
+859787bbe6150823fd6860894c822af23e12b69ca6d4867e3b7cbe48ad8b8aca  demurrage_token.wasm
